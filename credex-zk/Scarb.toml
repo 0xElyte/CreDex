@@ -1,0 +1,15 @@
+[package]
+name = "credex_zk"
+version = "0.1.0"
+edition = "2024_07"
+
+[dependencies]
+starknet = ">=2.6.0"
+
+[dev-dependencies]
+snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry", tag = "v0.57.0" }
+cairo_test = "2.16.0"
+
+[[target.starknet-contract]]
+name = "credex_zk"
+sierra = true
