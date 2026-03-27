@@ -112,4 +112,14 @@ contract CredexSBT is ERC721, Ownable, ICredexSBT {
         from = super._update(to, tokenId, auth);
         if (from != address(0) && to != address(0)) revert CredexErrors.SoulboundTransferForbidden();
     }
+
+    // EIP-5192: Minimal Soulbound NFTs
+    function locked(uint256 tokenId) external view returns (bool) {
+        _requireOwned(tokenId);
+        return true;
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
+        return interfaceId == 0xb45a3c0e || super.supportsInterface(interfaceId);
+    }
 }

@@ -7,7 +7,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {CredexLending} from "../src/core/CredexLending.sol";
 import {CredexSBT} from "../src/core/CredexSBT.sol";
+import {RelayedCreditVerifier} from "../src/core/RelayedCreditVerifier.sol";
 import {MockCreditVerifier} from "../src/mocks/MockCreditVerifier.sol";
+import {ICreditVerifier} from "../src/interfaces/ICreditVerifier.sol";
 import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {CredexTypes} from "../src/types/CredexTypes.sol";
 
@@ -25,6 +27,8 @@ contract DeployCredexProtocol is Script {
         uint256 initialLiquidity;
         string sbtName;
         string sbtSymbol;
+        address relayerAddress;
+        bool useMockVerifier;
     }
 
     struct DeployResult {
@@ -50,7 +54,20 @@ contract DeployCredexProtocol is Script {
             config.collateralAsset = address(collateralMock);
         }
 
-        MockCreditVerifier verifier = new MockCreditVerifier();
+        address verifierAddress = vm.envOr("CREDIT_VERIFIER", address(0));
+        ICreditVerifier verifier;
+        if (verifierAddress != address(0)) {
+            verifier = ICreditVerifier(verifierAddress);
+        } else if (config.useMockVerifier) {
+            verifier = ICreditVerifier(address(new MockCreditVerifier()));
+        } else {
+            address relayerAddr = config.relayerAddress != address(0)
+                ? config.relayerAddress
+                : vm.addr(config.deployerKey);
+            verifier = ICreditVerifier(address(new RelayedCreditVerifier(relayerAddr)));
+            console2.log("RelayedCreditVerifier deployed with relayer:", relayerAddr);
+        }
+
         CredexSBT sbt = new CredexSBT(config.sbtName, config.sbtSymbol);
         CredexLending lending = new CredexLending(
             config.debtAsset,
@@ -97,6 +114,8 @@ contract DeployCredexProtocol is Script {
         config.initialLiquidity = vm.envOr("INITIAL_LIQUIDITY", uint256(50_000 * DEFAULT_ONE_USDC));
         config.sbtName = vm.envOr("SBT_NAME", string("CreDex Credit"));
         config.sbtSymbol = vm.envOr("SBT_SYMBOL", string("cCREDIT"));
+        config.relayerAddress = vm.envOr("RELAYER_ADDRESS", address(0));
+        config.useMockVerifier = vm.envOr("USE_MOCK_VERIFIER", false);
 
         if (!config.useMockAssets) {
             require(config.debtAsset != address(0), "DEBT_ASSET required");
@@ -113,7 +132,7 @@ contract DeployCredexProtocol is Script {
         );
     }
 
-    function _logDeployment(DeployResult memory result, DeployConfig memory config) internal view {
+    function _logDeployment(DeployResult memory result, DeployConfig memory config) internal pure {
         console2.log("Deployer:", vm.addr(config.deployerKey));
         console2.log("Use mock assets:", config.useMockAssets);
         console2.log("Debt asset:", result.debtAsset);
