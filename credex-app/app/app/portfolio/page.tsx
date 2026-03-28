@@ -1,4 +1,19 @@
 "use client";
+
+function EtherscanLink({ hash }: { hash?: string }) {
+  if (!hash || hash.length < 10) return <span className="font-mono text-xs text-[#555]">—</span>;
+  return (
+    <a
+      href={`https://sepolia.etherscan.io/tx/${hash}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-mono text-xs text-[#777] hover:text-white transition-colors underline underline-offset-2"
+      title={hash}
+    >
+      {hash.slice(0, 10)}... ↗
+    </a>
+  );
+}
 import { useState, useCallback } from "react";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { useWalletGuard } from "@/hooks/useWalletGuard";

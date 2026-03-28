@@ -265,3 +265,53 @@ export function useWallet() {
     refreshBalance,
   };
 }
+
+// ── mUSDC Approval for CredexLending ──────────────────────────────────────────
+// Call this before requestLoan() to ensure CredexLending can pull mUSDC
+export async function ensureMUSDCApproval(
+  amountUSDC: number
+): Promise<boolean> {
+  if (!window.ethereum) return false;
+
+  const mUSDC   = "0x0ed7269d9Cc82b16E9E6D0f40c3bbF64c6Be17c2";
+  const lending = "0xf32A9AA02B2cb24676927BF5BC8D8001d6b76476";
+
+  try {
+    const accounts = await window.ethereum.request({ method: "eth_accounts" }) as string[];
+    if (!accounts?.length) return false;
+    const wallet = accounts[0];
+
+    // Check current allowance: allowance(owner, spender)
+    const allowanceSel = "0xdd62ed3e" +
+      wallet.slice(2).toLowerCase().padStart(64, "0") +
+      lending.slice(2).toLowerCase().padStart(64, "0");
+
+    const allowanceRes = await window.ethereum.request({
+      method: "eth_call",
+      params: [{ to: mUSDC, data: allowanceSel }, "latest"],
+    }) as string;
+
+    const currentAllowance = allowanceRes && allowanceRes !== "0x"
+      ? Number(BigInt(allowanceRes)) / 1_000_000
+      : 0;
+
+    if (currentAllowance >= amountUSDC) return true; // already approved
+
+    // Need approval — send approve() transaction via MetaMask
+    // approve(address spender, uint256 amount) — approve 10x the needed amount
+    const approveAmount = BigInt(Math.ceil(amountUSDC * 10) * 1_000_000);
+    const approveSel = "0x095ea7b3" +
+      lending.slice(2).toLowerCase().padStart(64, "0") +
+      approveAmount.toString(16).padStart(64, "0");
+
+    await window.ethereum.request({
+      method: "eth_sendTransaction",
+      params: [{ from: wallet, to: mUSDC, data: "0x" + approveSel }],
+    });
+
+    return true;
+  } catch (err) {
+    console.warn("[wallet] mUSDC approval failed:", err);
+    return false;
+  }
+}
