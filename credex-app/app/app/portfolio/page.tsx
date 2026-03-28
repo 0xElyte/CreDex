@@ -88,7 +88,7 @@ export default function PortfolioPage() {
       </div>
 
       {/* ── Top stats ─────────────────────────────────────────── */}
-      <div className="grid grid-cols-4 gap-px bg-white/[0.07]">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-white/[0.07]">
         <StatCard label="Total Borrowed"  value={`$${fmt(stats?.totalBorrowed  ?? 0)}`} />
         <StatCard label="Total Repaid"    value={`$${fmt(stats?.totalRepaid    ?? 0)}`} />
         <StatCard label="Yield Earned"    value={`$${isLoading ? "—" : (stats!.earnedYield).toFixed(2)}`} />
@@ -96,10 +96,10 @@ export default function PortfolioPage() {
       </div>
 
       {/* ── Two-column main layout ─────────────────────────────── */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
 
         {/* LEFT — 2/3 width */}
-        <div className="col-span-2 space-y-4">
+        <div className="col-span-1 lg:col-span-2 space-y-4">
 
           {/* Active loans table */}
           <div className="card p-6">
@@ -167,7 +167,7 @@ export default function PortfolioPage() {
               <SectionLabel>Lend Positions</SectionLabel>
               <div className="divide-y divide-white/[0.06]">
                 {deposits.map(d => (
-                  <div key={d.id} className="py-4 grid grid-cols-4 gap-4">
+                  <div key={d.id} className="py-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div>
                       <p className="font-mono text-xs text-[#777]">Position</p>
                       <p className="font-mono text-sm text-white mt-1">{d.id}</p>
@@ -217,7 +217,7 @@ export default function PortfolioPage() {
               <span className="font-mono text-5xl text-white font-medium">412</span>
               <span className="font-mono text-sm text-[#999]">days</span>
             </div>
-            <div className="grid grid-cols-10 gap-1 mb-4">
+            <div className="grid grid-cols-5 sm:grid-cols-10 gap-1 mb-4">
               {Array.from({length:30},(_,i)=>i<28).map((paid,i) => (
                 <div key={i} className="h-2.5 rounded-sm" style={{ background: paid ? "#fff" : "#1e1e1e" }} />
               ))}

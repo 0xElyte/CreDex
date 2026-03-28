@@ -66,7 +66,7 @@ function BorrowForm({ onSubmit }: { onSubmit: (p: BorrowRequestPayload) => void 
     <div className="card p-6 space-y-5">
       <p className="font-display text-xl text-white tracking-wide">New Borrow Request</p>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {/* Amount */}
         <div>
           <label className="font-mono text-xs text-[#888] tracking-widest uppercase block mb-2">Amount (USDC)</label>
@@ -128,7 +128,7 @@ function BorrowForm({ onSubmit }: { onSubmit: (p: BorrowRequestPayload) => void 
       </div>
 
       {/* Live calc */}
-      <div className="grid grid-cols-3 gap-px bg-[#1a1a1a]">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-px bg-[#1a1a1a]">
         {[
           { label: "LTV Ratio", value: `${ltv}%`, ok: ltv <= 80 },
           { label: "Collateral Req.", value: `${collateralRequired.toFixed(2)} ${asset}` },
@@ -307,7 +307,7 @@ function ScorePanel() {
           <SignalRow key={s.label} label={s.label} value={s.value} dimBar={s.value < 20} />
         ))}
       </div>
-      <div className="mt-5 pt-4 border-t border-white/[0.05] grid grid-cols-2 gap-3">
+      <div className="mt-5 pt-4 border-t border-white/[0.05] grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="bg-[#0a0a0a] p-3 text-center">
           <p className="font-mono text-sm text-white">{score.maxLTV * 100}%</p>
           <p className="font-mono text-sm text-[#777] uppercase tracking-wide mt-1">Max LTV</p>
@@ -389,7 +389,7 @@ function ChartsRow() {
         </ChartWrapper>
       )}
 
-      <div className="flex gap-4 mt-3 font-mono text-xs text-[#777]">
+      <div className="flex flex-wrap gap-3 mt-3 font-mono text-xs text-[#777]">
         <span>CPU: 88.2%</span>
         <span>ENTROPY: 0.99923</span>
         <span>ZK Latency: 142ms</span>
@@ -493,7 +493,7 @@ export default function BorrowPage() {
       </div>
 
       {/* Stats row */}
-      <div className="borrow-animate grid grid-cols-3 gap-px bg-white/[0.05]">
+      <div className="borrow-animate grid grid-cols-2 sm:grid-cols-3 gap-px bg-white/[0.05]">
         <StatCard
           label="Health Factor"
           value={avgHealth > 0 ? avgHealth.toFixed(2) : "—"}
@@ -511,7 +511,7 @@ export default function BorrowPage() {
       </div>
 
       {/* Form + Score */}
-      <div className="borrow-animate grid grid-cols-3 gap-px bg-white/[0.05]">
+      <div className="borrow-animate grid grid-cols-2 sm:grid-cols-3 gap-px bg-white/[0.05]">
         <div className="col-span-2 bg-[#0c0c0c]">
           <BorrowForm onSubmit={handleBorrow} />
         </div>

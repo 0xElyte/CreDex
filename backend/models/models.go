@@ -66,21 +66,21 @@ type LoanRequest struct {
 }
 
 type LoanRecord struct {
-	LoanID           string     `json:"loan_id"`
-	WalletAddress    string     `json:"wallet_address"`
-	AmountUSDC       float64    `json:"amount_usdc"`
-	CollateralPct    int        `json:"collateral_pct"`
-	InterestAPR      float64    `json:"interest_apr"`
-	Tier             string     `json:"tier"`
-	Status           LoanStatus `json:"status"`
-	CreatedAt        time.Time  `json:"created_at"`
-	DueDate          time.Time  `json:"due_date"`
-	RepaidAt         *time.Time `json:"repaid_at,omitempty"`
+	LoanID        string     `json:"loan_id"`
+	WalletAddress string     `json:"wallet_address"`
+	AmountUSDC    float64    `json:"amount_usdc"`
+	CollateralPct int        `json:"collateral_pct"`
+	InterestAPR   float64    `json:"interest_apr"`
+	Tier          string     `json:"tier"`
+	Status        LoanStatus `json:"status"`
+	CreatedAt     time.Time  `json:"created_at"`
+	DueDate       time.Time  `json:"due_date"`
+	RepaidAt      *time.Time `json:"repaid_at,omitempty"`
 	// On-chain fields — populated after contract interaction
-	TxHash           string     `json:"tx_hash,omitempty"`
-	EncryptedHandle  string     `json:"encrypted_handle,omitempty"`
-	ZKProofHash      string     `json:"zk_proof_hash,omitempty"`
-	OnChainConfirmed bool       `json:"on_chain_confirmed"`
+	TxHash           string `json:"tx_hash,omitempty"`
+	EncryptedHandle  string `json:"encrypted_handle,omitempty"`
+	ZKProofHash      string `json:"zk_proof_hash,omitempty"`
+	OnChainConfirmed bool   `json:"on_chain_confirmed"`
 }
 
 type LoanRequestResponse struct {
@@ -151,45 +151,56 @@ type TierDef struct {
 
 // EncryptResult is returned by the FHE encryption step
 type EncryptResult struct {
-	Handle  string `json:"handle"`   // euint32 ciphertext handle
-	Proof   string `json:"proof"`    // input proof for contract verification
-	Mocked  bool   `json:"mocked"`   // true if real Zama relayer was unavailable
+	Handle string `json:"handle"` // euint32 ciphertext handle
+	Proof  string `json:"proof"`  // input proof for contract verification
+	Mocked bool   `json:"mocked"` // true if real Zama relayer was unavailable
 }
 
 // ZKProofResult is returned by the Cairo proof generation step
 type ZKProofResult struct {
-	Proof       []byte `json:"proof"`        // proof bytes
-	ProofHash   string `json:"proof_hash"`   // hex hash of proof
-	ScoreAbove  int    `json:"score_above"`  // threshold that was proven
-	Mocked      bool   `json:"mocked"`       // true if Cairo prover was unavailable
+	Proof      []byte `json:"proof"`       // proof bytes
+	ProofHash  string `json:"proof_hash"`  // hex hash of proof
+	ScoreAbove int    `json:"score_above"` // threshold that was proven
+	Mocked     bool   `json:"mocked"`      // true if Cairo prover was unavailable
 }
 
 // RelayResult is returned after the backend relays a proof from Starknet to EVM.
 type RelayResult struct {
 	// ProofID is the 0x-prefixed bytes32 identifier stored in RelayedCreditVerifier.
-	ProofID      string `json:"proof_id"`
+	ProofID string `json:"proof_id"`
 	// ProofData is the abi.encode(proofId) hex string the frontend passes to
 	// CredexLending.requestLoan() as the proofData bytes argument.
-	ProofData    string `json:"proof_data"`
+	ProofData string `json:"proof_data"`
 	// RelayTxHash is the EVM transaction hash for the relay() call.
-	RelayTxHash  string `json:"relay_tx_hash"`
+	RelayTxHash string `json:"relay_tx_hash"`
 	// ProofExpiry is the Unix timestamp after which the proof is no longer valid.
-	ProofExpiry  int64  `json:"proof_expiry"`
+	ProofExpiry int64 `json:"proof_expiry"`
 	// StarknetUsed is true when the proof was sourced from the live Starknet contract.
-	StarknetUsed bool   `json:"starknet_used"`
+	StarknetUsed bool `json:"starknet_used"`
 	// Mocked is true when the EVM relay transaction was simulated (contract not configured).
-	Mocked       bool   `json:"mocked"`
+	Mocked bool `json:"mocked"`
 }
 
 // ChainSubmitResult is returned after submitting the loan tx on-chain
 type ChainSubmitResult struct {
 	TxHash    string `json:"tx_hash"`
 	Confirmed bool   `json:"confirmed"`
-	Mocked    bool   `json:"mocked"`   // true if contract address not yet configured
+	Mocked    bool   `json:"mocked"` // true if contract address not yet configured
 }
 
 // FilecoinStoreResult is returned after storing proof on Filecoin
 type FilecoinStoreResult struct {
 	CID    string `json:"cid"`
 	Mocked bool   `json:"mocked"`
+}
+
+type DepositRecord struct {
+	DepositID     string    `json:"deposit_id"`
+	WalletAddress string    `json:"wallet_address"`
+	AmountUSDC    float64   `json:"amount_usdc"`
+	SharePercent  float64   `json:"share_percent"`
+	EarnedYield   float64   `json:"earned_yield"`
+	DepositedAt   time.Time `json:"deposited_at"`
+	CurrentValue  float64   `json:"current_value"`
+	TxHash        string    `json:"tx_hash"`
 }

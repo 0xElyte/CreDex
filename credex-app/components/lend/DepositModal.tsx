@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
-import { useDeposit } from "@/hooks/useDeposit";
+import { useAppSelector, useAppDispatch } from "@/store/hooks";
+import { resetDepositFlow } from "@/store/financeSlice";
 import { ProgressBar } from "@/components/ui";
 import { clsx } from "clsx";
 
@@ -23,27 +24,33 @@ function CopyBtn({ text }: { text: string }) {
 
 export function DepositModal({
   amount,
+  isPending,
+  error,
   onClose,
 }: {
-  amount: number;
-  onClose: () => void;
+  amount:    number;
+  isPending: boolean;
+  error:     string | null;
+  onClose:   () => void;
 }) {
-  const { isPending, success, txHash, stepMessage, error, reset } = useDeposit();
+  const dispatch      = useAppDispatch();
+  const depositSuccess = useAppSelector((s) => s.finance.depositSuccess);
+  const txHash         = useAppSelector((s) => s.finance.depositTxHash);
   const [visible, setVisible] = useState(false);
 
   useEffect(() => { requestAnimationFrame(() => setVisible(true)); }, []);
 
   const handleClose = () => {
     setVisible(false);
-    setTimeout(() => { reset(); onClose(); }, 180);
+    setTimeout(() => {
+      dispatch(resetDepositFlow());
+      onClose();
+    }, 180);
   };
 
-  const progress = success ? 100
+  const progress = depositSuccess ? 100
     : !isPending ? 0
-    : stepMessage.includes("Broadcasting") ? 70
-    : stepMessage.includes("pool") ? 85
-    : stepMessage.includes("Confirmed") ? 95
-    : 35;
+    : 45;
 
   return (
     <div
@@ -51,7 +58,9 @@ export function DepositModal({
         "modal-backdrop transition-opacity duration-200",
         visible ? "opacity-100" : "opacity-0"
       )}
-      onClick={(e) => { if (e.target === e.currentTarget && (success || !!error)) handleClose(); }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && (depositSuccess || !!error)) handleClose();
+      }}
     >
       <div
         className={clsx(
@@ -65,18 +74,21 @@ export function DepositModal({
           <div className="flex items-center gap-3">
             <span className={clsx(
               "w-2 h-2 rounded-full",
-              error ? "bg-[#888]" : success ? "bg-white" : "bg-white pulse-dot"
+              error ? "bg-[#888]" : depositSuccess ? "bg-white" : "bg-white pulse-dot"
             )} />
             <span className="font-mono text-sm text-[#aaa] tracking-widest uppercase">
-              {error ? "Transaction Failed" : success ? "Deposit Confirmed" : "Deposit Transaction"}
+              {error ? "Transaction Failed" : depositSuccess ? "Deposit Confirmed" : "Deposit Transaction"}
             </span>
           </div>
-          {(success || !!error) && (
-            <button onClick={handleClose} className="text-[#aaa] hover:text-white font-mono text-lg leading-none transition-colors">×</button>
+          {(depositSuccess || !!error) && (
+            <button
+              onClick={handleClose}
+              className="text-[#aaa] hover:text-white font-mono text-lg leading-none transition-colors"
+            >×</button>
           )}
         </div>
 
-        {/* Scrollable body */}
+        {/* Body */}
         <div className="modal-body p-6 space-y-5">
           {/* Amount */}
           <div>
@@ -95,16 +107,21 @@ export function DepositModal({
             <ProgressBar value={progress} pulse={isPending} />
           </div>
 
-          {/* Step message */}
+          {/* Status message */}
           <div className="bg-[#050505] border border-white/[0.07] px-4 py-4 min-h-[56px] relative">
             {isPending && <div className="absolute top-0 left-0 right-0 h-px shimmer" />}
             <p className="font-mono text-sm text-[#aaa] leading-relaxed">
-              {stepMessage || (success ? "Deposit confirmed." : error || "Awaiting confirmation...")}
-              {isPending && !stepMessage && <span className="blink ml-0.5">_</span>}
+              {error
+                ? error
+                : depositSuccess
+                  ? "Deposit confirmed. Earning yield now."
+                  : isPending
+                    ? <>Submitting deposit to Lendr protocol<span className="blink ml-0.5">_</span></>
+                    : "Awaiting confirmation..."}
             </p>
           </div>
 
-          {/* TX hash with copy — Issue 8 */}
+          {/* TX hash */}
           {txHash && (
             <div className="bg-[#0a0a0a] border border-white/[0.07] px-4 py-3">
               <div className="flex items-center justify-between mb-1.5">
@@ -116,7 +133,7 @@ export function DepositModal({
           )}
 
           {/* Success breakdown */}
-          {success && (
+          {depositSuccess && (
             <div className="grid grid-cols-3 gap-2 slide-up">
               {[
                 { label: "30D Yield",    value: `+$${((amount * 0.1482) / 12).toFixed(2)}` },
@@ -137,8 +154,8 @@ export function DepositModal({
             </div>
           )}
 
-          {/* Action */}
-          {success ? (
+          {/* Action button */}
+          {depositSuccess ? (
             <button
               onClick={handleClose}
               className="w-full bg-white text-black font-mono text-sm tracking-widest uppercase py-3 hover:bg-[#e8e8e8] transition-colors"

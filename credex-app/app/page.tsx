@@ -42,11 +42,11 @@ export default function LandingPage() {
       }} />
 
       {/* NAV */}
-      <nav id="main-nav" className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-10 h-16 transition-all duration-300 [&.nav-scrolled]:bg-black/95 [&.nav-scrolled]:border-b [&.nav-scrolled]:border-white/[0.08] [&.nav-scrolled]:backdrop-blur-md">
+      <nav id="main-nav" className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-5 lg:px-10 h-16 transition-all duration-300 [&.nav-scrolled]:bg-black/95 [&.nav-scrolled]:border-b [&.nav-scrolled]:border-white/[0.08] [&.nav-scrolled]:backdrop-blur-md">
         <span className="font-display text-2xl text-white tracking-wider">LENDR
           <span className="font-mono text-xs text-[#999] ml-2 tracking-widest align-middle">Protocol</span>
         </span>
-        <div className="flex items-center gap-8">
+        <div className="hidden md:flex items-center gap-8">
           <a href="#how" className="font-mono text-sm text-[#777] hover:text-white transition-colors tracking-wide uppercase">How It Works</a>
           <a href="#problems" className="font-mono text-sm text-[#777] hover:text-white transition-colors tracking-wide uppercase">Why Lendr</a>
           <Link href="/app" className="font-mono text-sm bg-white text-black px-5 py-2 hover:bg-[#e8e8e8] transition-colors tracking-wide uppercase font-medium">
@@ -56,7 +56,7 @@ export default function LandingPage() {
       </nav>
 
       {/* HERO */}
-      <section className="relative z-10 min-h-screen flex flex-col justify-center px-10 pt-20">
+      <section className="relative z-10 min-h-screen flex flex-col justify-center px-5 lg:px-10 pt-20">
         <div className="animate-fadeup">
           <div className="font-mono text-sm text-[#999] tracking-widest uppercase flex items-center gap-3 mb-10">
             <span className="w-8 h-px bg-white/30 inline-block" />
@@ -75,7 +75,7 @@ export default function LandingPage() {
             <code className="font-mono text-sm text-[#aaa] bg-white/[0.06] px-2 py-0.5">// No KYC. Just math.</code>
           </p>
 
-          <div className="flex gap-4">
+          <div className="flex flex-col sm:flex-row gap-4">
             <Link href="/app" className="font-mono text-sm bg-white text-black px-10 py-4 hover:bg-[#e8e8e8] transition-colors tracking-wide uppercase font-medium">
               Enter the Vault
             </Link>

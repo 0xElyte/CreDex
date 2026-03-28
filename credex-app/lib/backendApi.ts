@@ -168,6 +168,36 @@ export interface GoRegisterResponse {
 
 // ─── Typed API functions ──────────────────────────────────────────────────────
 
+export interface GoDepositResponse {
+  deposit_id:    string;
+  wallet:        string;
+  amount_usdc:   number;
+  share_percent: number;
+  apy:           number;
+  tx_hash:       string;
+  deposited_at:  string;
+  message:       string;
+}
+
+export interface GoDepositRecord {
+  deposit_id:     string;
+  wallet_address: string;
+  amount_usdc:    number;
+  share_percent:  number;
+  earned_yield:   number;
+  deposited_at:   string;
+  current_value:  number;
+  tx_hash:        string;
+}
+
+export interface GoDepositsResponse {
+  wallet:          string;
+  deposits:        GoDepositRecord[];
+  total_deposited: number;
+  total_earned:    number;
+  total_value:     number;
+}
+
 export const backendApi = {
 
   health: () =>
@@ -198,13 +228,25 @@ export const backendApi = {
     ),
 
   // Wallet
-  registerWallet: (wallet: string, telegramChatId = 0) =>
+  registerWallet: (wallet: string, telegramChatId?: number) =>
     post<GoRegisterResponse>("/api/v1/wallet/register", {
       wallet_address:   wallet,
-      telegram_chat_id: telegramChatId,
+      // Only send telegram_chat_id if provided and non-zero
+      // Go backend's required tag rejects 0
+      ...(telegramChatId ? { telegram_chat_id: telegramChatId } : {}),
     }),
 
   // Tiers
   getTiers: () =>
     get<{ tiers: GoTierDef[]; source?: string }>("/api/v1/tiers"),
+
+  // Deposits
+  deposit: (wallet: string, amountUsdc: number) =>
+    post<GoDepositResponse>("/api/v1/deposit", {
+      wallet_address: wallet,
+      amount_usdc:    amountUsdc,
+    }),
+
+  getDeposits: (wallet: string) =>
+    get<GoDepositsResponse>(`/api/v1/deposit/${wallet}`),
 };

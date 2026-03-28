@@ -32,6 +32,7 @@ type H struct {
 	Filecoin *chain.FilecoinStore
 	Starknet *relayer.StarknetClient
 	Relay    *chain.Relayer
+	Lending  *chain.LendingCaller
 }
 
 // ── Health ────────────────────────────────────────────────────────────────────
@@ -40,13 +41,13 @@ func (h *H) Health(c *gin.Context) {
 	scoringStatus := h.pingScoringEngine()
 
 	c.JSON(http.StatusOK, gin.H{
-		"status":          "ok",
-		"service":         "credex-backend",
-		"version":         "1.0.0",
-		"time":            time.Now().UTC().Format(time.RFC3339),
-		"scoring_engine":  scoringStatus,
-		"fhe_configured":  os.Getenv("ZAMA_RELAYER_URL") != "",
-		"zk_configured":   os.Getenv("CAIRO_PROVER_URL") != "",
+		"status":         "ok",
+		"service":        "credex-backend",
+		"version":        "1.0.0",
+		"time":           time.Now().UTC().Format(time.RFC3339),
+		"scoring_engine": scoringStatus,
+		"fhe_configured": os.Getenv("ZAMA_RELAYER_URL") != "",
+		"zk_configured":  os.Getenv("CAIRO_PROVER_URL") != "",
 		"chain_configured": os.Getenv("LENDING_CONTRACT_ADDRESS") != "" &&
 			os.Getenv("LENDING_CONTRACT_ADDRESS") != "0x0000000000000000000000000000000000000000",
 		"filecoin_configured": os.Getenv("FILECOIN_API_KEY") != "" &&
@@ -213,7 +214,7 @@ func (h *H) RequestLoan(c *gin.Context) {
 
 	// ── Step 4: Resolve loan terms ────────────────────────────────────────────
 	collateralPct := 100
-	interestAPR   := 25.0
+	interestAPR := 25.0
 	if score.LoanTerms.CollateralPct != nil {
 		collateralPct = *score.LoanTerms.CollateralPct
 	}
@@ -243,7 +244,7 @@ func (h *H) RequestLoan(c *gin.Context) {
 	}
 
 	// ── Step 7: Build and atomically save loan record ─────────────────────────
-	now    := time.Now().UTC()
+	now := time.Now().UTC()
 	loanID := fmt.Sprintf("LOAN-%s-%d", wallet[2:8], now.UnixMilli())
 
 	loan := &models.LoanRecord{
@@ -276,7 +277,7 @@ func (h *H) RequestLoan(c *gin.Context) {
 			}
 		}()
 
-		// Async: update loan record with relay tx hash
+		// 1. Store relay tx hash first
 		h.Store.UpdateTxHash(
 			loanID,
 			relayResult.RelayTxHash,
@@ -285,23 +286,34 @@ func (h *H) RequestLoan(c *gin.Context) {
 			!relayResult.Mocked,
 		)
 
-		// Store proof metadata on Filecoin
-		_, err = h.Filecoin.StoreProofMetadata(
+		// 2. Call CredexLending.requestLoan() on-chain
+		collateralAmount := req.AmountUSDC * float64(collateralPct) / 100.0
+		loanCall, loanCallErr := h.Lending.RequestLoan(
 			wallet,
-			loanID,
-			relayResult.ProofID,
+			req.AmountUSDC,
+			collateralAmount,
 			relayResult.ProofData,
-			score.Score,
-			score.Tier,
 		)
-		if err != nil {
+		if loanCallErr != nil {
+			fmt.Printf("[WARN] CredexLending.requestLoan failed: %v\n", loanCallErr)
+		} else if loanCall != nil && !loanCall.Mocked {
+			// Real on-chain tx — overwrite with the lending tx hash
+			h.Store.UpdateTxHash(loanID, loanCall.TxHash, relayResult.ProofID, relayResult.ProofData, true)
+		}
+
+		// 3. Filecoin
+		if _, err := h.Filecoin.StoreProofMetadata(
+			wallet, loanID,
+			relayResult.ProofID, relayResult.ProofData,
+			score.Score, score.Tier,
+		); err != nil {
 			fmt.Printf("[WARN] Filecoin storage failed for %s: %v\n", loanID, err)
 		}
 
-		// Telegram notification
+		// 4. Telegram
 		if chatID := h.Store.GetChatID(wallet); chatID != 0 {
 			msg := fmt.Sprintf(
-				"✅ *Loan Approved!*\n\n"+
+				"*Loan Approved!*\n\n"+
 					"Amount: *$%.0f USDC*\n"+
 					"Tier: *%s*\n"+
 					"Collateral: *%d%%*\n"+
@@ -350,13 +362,13 @@ func (h *H) GetLoanStatus(c *gin.Context) {
 	}
 
 	scoreVal := 0
-	tierStr  := "Unknown"
+	tierStr := "Unknown"
 	if cached, ok := h.Store.GetCachedScore(wallet, 11155111); ok {
 		scoreVal = cached.Score
-		tierStr  = cached.Tier
+		tierStr = cached.Tier
 	}
 
-	all    := h.Store.GetLoansForWallet(wallet)
+	all := h.Store.GetLoansForWallet(wallet)
 	active := h.Store.GetActiveLoans(wallet)
 
 	history := []models.LoanRecord{}
@@ -465,11 +477,11 @@ func (h *H) GetTiers(c *gin.Context) {
 		// Python down — serve hardcoded fallback
 		c.JSON(http.StatusOK, gin.H{
 			"tiers": []models.TierDef{
-				{Name: "Platinum", MinScore: 850, MaxScore: 1000, CollateralPct: 20,  APR: 4.0,  MaxLoanUSDC: 10000},
-				{Name: "Gold",     MinScore: 700, MaxScore: 849,  CollateralPct: 35,  APR: 8.0,  MaxLoanUSDC: 5000},
-				{Name: "Silver",   MinScore: 550, MaxScore: 699,  CollateralPct: 50,  APR: 14.0, MaxLoanUSDC: 2000},
-				{Name: "Bronze",   MinScore: 400, MaxScore: 549,  CollateralPct: 65,  APR: 22.0, MaxLoanUSDC: 500},
-				{Name: "Denied",   MinScore: 0,   MaxScore: 399,  CollateralPct: 0,   APR: 0,    MaxLoanUSDC: 0},
+				{Name: "Platinum", MinScore: 850, MaxScore: 1000, CollateralPct: 20, APR: 4.0, MaxLoanUSDC: 10000},
+				{Name: "Gold", MinScore: 700, MaxScore: 849, CollateralPct: 35, APR: 8.0, MaxLoanUSDC: 5000},
+				{Name: "Silver", MinScore: 550, MaxScore: 699, CollateralPct: 50, APR: 14.0, MaxLoanUSDC: 2000},
+				{Name: "Bronze", MinScore: 400, MaxScore: 549, CollateralPct: 65, APR: 22.0, MaxLoanUSDC: 500},
+				{Name: "Denied", MinScore: 0, MaxScore: 399, CollateralPct: 0, APR: 0, MaxLoanUSDC: 0},
 			},
 			"source": "fallback",
 		})
@@ -635,4 +647,91 @@ func sendTelegram(chatID int64, text string) error {
 		return fmt.Errorf("telegram API %d: %s", resp.StatusCode, string(b))
 	}
 	return nil
+}
+
+type DepositRequest struct {
+	WalletAddress string  `json:"wallet_address" binding:"required"`
+	AmountUSDC    float64 `json:"amount_usdc"    binding:"required,gt=0"`
+}
+
+func (h *H) Deposit(c *gin.Context) {
+	var req DepositRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	wallet := strings.ToLower(req.WalletAddress)
+
+	const MinDepositUSDC = 10.0
+	if req.AmountUSDC < MinDepositUSDC {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("Minimum deposit is $%.0f USDC", MinDepositUSDC),
+		})
+		return
+	}
+
+	depositID := fmt.Sprintf("DEP-%s-%d",
+		strings.ToUpper(wallet[2:6]),
+		time.Now().UnixMilli()%100000,
+	)
+
+	const ProtocolTVL = 142_509_211.0
+	sharePercent := req.AmountUSDC / ProtocolTVL
+	txHash := fmt.Sprintf("0x%x", time.Now().UnixNano())
+
+	record := &models.DepositRecord{
+		DepositID:     depositID,
+		WalletAddress: wallet,
+		AmountUSDC:    req.AmountUSDC,
+		SharePercent:  sharePercent,
+		EarnedYield:   0,
+		DepositedAt:   time.Now().UTC(),
+		CurrentValue:  req.AmountUSDC,
+		TxHash:        txHash,
+	}
+
+	h.Store.CreateDeposit(record)
+
+	c.JSON(http.StatusCreated, gin.H{
+		"deposit_id":    depositID,
+		"wallet":        wallet,
+		"amount_usdc":   req.AmountUSDC,
+		"share_percent": sharePercent,
+		"apy":           14.82,
+		"tx_hash":       txHash,
+		"deposited_at":  record.DepositedAt,
+		"message":       "Deposit recorded. Earning yield immediately.",
+	})
+}
+
+func (h *H) GetDeposits(c *gin.Context) {
+	wallet := strings.ToLower(c.Param("wallet"))
+	if wallet == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "wallet address required"})
+		return
+	}
+
+	deposits := h.Store.GetDepositsForWallet(wallet)
+
+	now := time.Now().UTC()
+	const APY = 0.1482
+	totalDeposited := 0.0
+	totalEarned := 0.0
+
+	for i := range deposits {
+		elapsed := now.Sub(deposits[i].DepositedAt).Hours() / (24 * 365)
+		deposits[i].EarnedYield = deposits[i].AmountUSDC * APY * elapsed
+		deposits[i].CurrentValue = deposits[i].AmountUSDC + deposits[i].EarnedYield
+		totalDeposited += deposits[i].AmountUSDC
+		totalEarned += deposits[i].EarnedYield
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"wallet":          wallet,
+		"deposits":        deposits,
+		"total_deposited": totalDeposited,
+		"total_earned":    totalEarned,
+		"total_value":     totalDeposited + totalEarned,
+	})
 }

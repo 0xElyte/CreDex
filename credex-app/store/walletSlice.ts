@@ -8,6 +8,7 @@ const initialState: WalletState = {
   ethBalance: 0,
   tier: null,
   zkProofActive: false,
+  revealedScore: null,
 };
 
 export const walletSlice = createSlice({
@@ -44,9 +45,12 @@ export const walletSlice = createSlice({
     updateBalance(state, action: PayloadAction<{ balance: number }>) {
       state.balance = action.payload.balance;
     },
+    setRevealedScore(state, action: PayloadAction<number>) {
+      state.revealedScore = action.payload;
+    },
   },
 });
 
-export const { setConnecting, setConnected, setDisconnected, updateBalance } =
+export const { setConnecting, setConnected, setDisconnected, updateBalance, setRevealedScore } =
   walletSlice.actions;
 export default walletSlice.reducer;

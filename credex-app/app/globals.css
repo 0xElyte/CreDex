@@ -123,3 +123,9 @@ body {
   border-bottom: 1px solid rgba(255,255,255,0.08) !important;
   backdrop-filter: blur(16px) !important;
 }
+
+
+/* Mobile modal fix */
+@media (max-width: 639px) {
+  .modal-box { width: 95vw !important; }
+}

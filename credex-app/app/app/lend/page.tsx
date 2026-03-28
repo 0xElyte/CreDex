@@ -3,7 +3,8 @@ import { useState, useEffect, useRef } from "react";
 import { usePoolStats, useActivityFeed, useCreditScore } from "@/hooks/useQueries";
 import { useDeposit } from "@/hooks/useDeposit";
 import { useWalletGuard } from "@/hooks/useWalletGuard";
-import { useAppSelector } from "@/store/hooks";
+import { useAppSelector, useAppDispatch } from "@/store/hooks";
+import { resetDepositFlow } from "@/store/financeSlice";
 import { DepositModal } from "@/components/lend/DepositModal";
 import { StatCard, SectionLabel, ProgressBar, StatusPill } from "@/components/ui";
 import { gsap } from "gsap";
@@ -28,7 +29,7 @@ function PoolStatsBar() {
     n >= 1e9 ? `$${(n / 1e9).toFixed(2)}B` : `$${(n / 1e6).toFixed(1)}M`;
 
   return (
-    <div className="grid grid-cols-4 gap-px bg-white/[0.05]">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-white/[0.05]">
       <StatCard
         label="Total Value Locked"
         value={isLoading ? "—" : fmt(data!.tvl)}
@@ -112,7 +113,7 @@ function DepositForm({ onDeposit, isPending }: { onDeposit: (amount: number) => 
       )}
 
       {/* Projections */}
-      <div className="grid grid-cols-3 gap-px bg-[#1a1a1a]">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-px bg-[#1a1a1a]">
         {[
           { label: "30D Projection", value: `+$${monthlyYield.toFixed(2)}` },
           { label: "Yearly Yield", value: `+$${yearlyYield.toLocaleString("en", { maximumFractionDigits: 0 })}` },
@@ -304,7 +305,7 @@ function SecurityPanel() {
 
 // ─── My Deposits ───────────────────────────────────────────────────────────────
 function MyDeposits() {
-  const { deposits } = useDeposit();
+  const deposits = useAppSelector((s) => s.finance.deposits);
   if (deposits.length === 0) return null;
 
   return (
@@ -312,7 +313,7 @@ function MyDeposits() {
       <SectionLabel>My Deposit Positions</SectionLabel>
       <div className="divide-y divide-white/[0.04]">
         {deposits.map((d) => (
-          <div key={d.id} className="py-3 grid grid-cols-5 gap-4 items-center font-mono text-sm">
+          <div key={d.id} className="py-3 grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-4 items-start sm:items-center font-mono text-sm">
             <span className="text-white">{d.id}</span>
             <span className="text-[#888]">{d.amount.toLocaleString()} USDC</span>
             <span className="text-[#999]">{(d.sharePercent * 100).toFixed(4)}% share</span>
@@ -329,7 +330,10 @@ function MyDeposits() {
 export default function LendPage() {
   useWalletGuard();
 
-  const { deposit, isPending, success, reset } = useDeposit();
+  const { executeDeposit, isPending, error: depositError } = useDeposit();
+  const depositSuccess = useAppSelector((s) => s.finance.depositSuccess);
+  const depositTxHash  = useAppSelector((s) => s.finance.depositTxHash);
+  const dispatch       = useAppDispatch();
   const [pendingAmount, setPendingAmount] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -346,7 +350,7 @@ export default function LendPage() {
 
   const handleDeposit = async (amount: number) => {
     setPendingAmount(amount);
-    await deposit(amount);
+    await executeDeposit(amount);
   };
 
   return (
@@ -369,8 +373,8 @@ export default function LendPage() {
       <div className="lend-animate"><PoolStatsBar /></div>
 
       {/* Main layout */}
-      <div className="lend-animate grid grid-cols-3 gap-px bg-white/[0.05]">
-        <div className="col-span-2 space-y-px bg-white/[0.05]">
+      <div className="lend-animate grid grid-cols-2 sm:grid-cols-3 gap-px bg-white/[0.05]">
+        <div className="col-span-1 lg:col-span-2 space-y-px bg-white/[0.05]">
           <div className="bg-[#0c0c0c]"><DepositForm onDeposit={handleDeposit} isPending={isPending} /></div>
           <div className="bg-[#0c0c0c]"><ActivityFeed /></div>
         </div>
@@ -384,8 +388,13 @@ export default function LendPage() {
       <div className="lend-animate"><MyDeposits /></div>
 
       {/* Deposit modal - shown during and immediately after transaction */}
-      {pendingAmount && (isPending || success) && (
-        <DepositModal amount={pendingAmount} onClose={() => { reset(); setPendingAmount(null); }} />
+      {pendingAmount && (isPending || depositSuccess) && (
+        <DepositModal
+          amount={pendingAmount}
+          isPending={isPending}
+          error={depositError ?? null}
+          onClose={() => { dispatch(resetDepositFlow()); setPendingAmount(null); }}
+        />
       )}
     </div>
   );

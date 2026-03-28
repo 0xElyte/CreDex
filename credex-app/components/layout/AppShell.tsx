@@ -45,6 +45,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Backend health ping
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
+  const [sidebarOpen,  setSidebarOpen]  = useState(false);
   useEffect(() => {
     let mounted = true;
     const ping = async () => {
@@ -81,7 +82,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen noise">
       {/* ── SIDEBAR ─────────────────────────────────────────────── */}
-      <aside className="fixed left-0 top-0 h-full w-60 bg-[#070707] border-r border-white/[0.09] z-40 flex flex-col">
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-30 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <aside className={clsx(
+        "fixed left-0 top-0 h-full w-60 bg-[#070707] border-r border-white/[0.09] z-40 flex flex-col transition-transform duration-200",
+        "lg:translate-x-0",
+        sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+      )}>
         {/* Logo */}
         <div className="px-6 py-5 border-b border-white/[0.07]">
           <Link href="/" className="block">
@@ -99,6 +112,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             icon="⬡"
             isActive={pathname === "/app"}
             isLocked={false}
+            onNav={() => setSidebarOpen(false)}
           />
 
           {/* Role-gated items */}
@@ -111,6 +125,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               isActive={pathname.startsWith(item.href)}
               isLocked={false}
               badge={item.href === "/app/borrow" && activeLoanCount > 0 ? activeLoanCount : undefined}
+              onNav={() => setSidebarOpen(false)}
             />
           ))}
 
@@ -160,15 +175,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* ── MAIN ────────────────────────────────────────────────── */}
-      <div className="flex-1 ml-60 flex flex-col min-h-screen">
-        <header className="sticky top-0 z-30 flex items-center justify-between px-8 h-16 bg-black/95 backdrop-blur-md border-b border-white/[0.08]">
-          <div className="flex items-center gap-4">
+      <div className="flex-1 lg:ml-60 flex flex-col min-h-screen">
+        <header className="sticky top-0 z-30 flex items-center justify-between px-4 lg:px-8 h-16 bg-black/95 backdrop-blur-md border-b border-white/[0.08]">
+          <div className="flex items-center gap-3">
+            {/* Hamburger — mobile only */}
+            <button
+              className="lg:hidden flex flex-col gap-1.5 p-1.5 text-[#888] hover:text-white transition-colors"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Open menu"
+            >
+              <span className="block w-5 h-px bg-current" />
+              <span className="block w-5 h-px bg-current" />
+              <span className="block w-5 h-px bg-current" />
+            </button>
+
             <div className="flex items-center gap-2 font-mono text-sm text-[#777] tracking-wide uppercase">
               <Link href="/app" className="hover:text-white transition-colors">App</Link>
               {pathname !== "/app" && (
                 <>
                   <span className="text-[#999]">/</span>
-                  <span className="text-[#aaa]">
+                  <span className="text-[#aaa] hidden sm:inline">
                     {[...BORROW_NAV, ...LEND_NAV].find(n => pathname.startsWith(n.href))?.label}
                   </span>
                 </>
@@ -184,7 +210,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <WalletButton />
         </header>
 
-        <main ref={mainRef} className="flex-1 p-8 max-w-[1440px] w-full mx-auto">
+        <main ref={mainRef} className="flex-1 p-4 lg:p-8 max-w-[1440px] w-full mx-auto">
           {children}
         </main>
       </div>
@@ -195,14 +221,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 function NavItem({
-  href, label, icon, isActive, isLocked, badge,
+  href, label, icon, isActive, isLocked, badge, onNav,
 }: {
   href: string; label: string; icon: string;
   isActive: boolean; isLocked: boolean; badge?: number;
+  onNav?: () => void;
 }) {
   return (
     <Link
       href={isLocked ? "/app" : href}
+      onClick={onNav}
       className={clsx(
         "flex items-center gap-3 px-5 py-3.5 font-mono text-sm tracking-wide uppercase transition-all duration-150 border-l-2",
         isActive

@@ -9,6 +9,7 @@ export interface WalletState {
   ethBalance: number;
   tier: CreditTier | null;
   zkProofActive: boolean;
+  revealedScore: number | null;
 }
 
 // ─── Credit Score ─────────────────────────────────────────────────────────────

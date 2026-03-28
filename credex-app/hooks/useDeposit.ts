@@ -1,86 +1,59 @@
-import { useCallback, useState } from "react";
+"use client";
+import { useState, useCallback } from "react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
-import { startDeposit, confirmDeposit, resetDepositFlow } from "@/store/financeSlice";
 import { updateBalance } from "@/store/walletSlice";
-import { addToast, dismissLoading } from "@/store/toastSlice";
-import { executeDeposit } from "@/lib/api";
-import type { DepositPosition } from "@/types";
-
-const LOADING_TOAST_ID = "deposit-loading";
+import { confirmDeposit, startDeposit } from "@/store/financeSlice";
+import { backendApi } from "@/lib/backendApi";
 
 export function useDeposit() {
-  const dispatch = useAppDispatch();
-  const { depositTxPending, depositTxHash, depositSuccess, deposits } =
-    useAppSelector((s) => s.finance);
+  const dispatch      = useAppDispatch();
   const walletAddress = useAppSelector((s) => s.wallet.address);
   const walletBalance = useAppSelector((s) => s.wallet.balance);
-  const [stepMessage, setStepMessage] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [isPending,  setIsPending]  = useState(false);
+  const [error,      setError]      = useState<string | null>(null);
 
-  const deposit = useCallback(async (amount: number) => {
-    if (!walletAddress) return;
+  const executeDeposit = useCallback(async (amount: number) => {
+    if (!walletAddress) {
+      setError("Wallet not connected");
+      return;
+    }
+    if (amount <= 0 || amount > walletBalance) {
+      setError("Invalid deposit amount");
+      return;
+    }
+
+    setIsPending(true);
     setError(null);
-    setStepMessage("");
     dispatch(startDeposit(amount));
-    dispatch(addToast({
-      id: LOADING_TOAST_ID,
-      type: "loading",
-      title: "Processing Deposit",
-      message: "Approving USDC spend...",
-      duration: 0,
-    }));
 
     try {
-      const result = await executeDeposit(
-        { amount, walletAddress: walletAddress! },
-        (msg) => setStepMessage(msg)
-      );
+      // Call real Go backend deposit endpoint
+      const result = await backendApi.deposit(walletAddress, amount);
 
-      const position: DepositPosition = {
-        id: `DEP-${Date.now()}`,
-        amount: result.depositedAmount,
-        sharePercent: result.sharePercent,
-        earnedYield: 0,
-        depositedAt: result.timestamp,
-        currentValue: result.depositedAmount,
-      };
-
-      dispatch(confirmDeposit({ txHash: result.txHash, position }));
-      // Balance will be refreshed from chain after deposit confirms
-      // For immediate UI feedback, subtract locally
-      dispatch(updateBalance({ balance: Math.max(0, walletBalance - amount) }));
-      setStepMessage("Deposit confirmed!");
-
-      // Dismiss loading, show success
-      dispatch(dismissLoading());
-      dispatch(addToast({
-        type: "success",
-        title: "Deposit Confirmed ✓",
-        message: `${amount.toLocaleString()} USDC · Est. +$${(amount * 0.1482).toLocaleString("en", { maximumFractionDigits: 0 })}/yr`,
+      // Update Redux with confirmed deposit
+      dispatch(confirmDeposit({
+        txHash:   result.tx_hash,
+        position: {
+          id:           result.deposit_id,
+          amount:       result.amount_usdc,
+          sharePercent: result.share_percent,
+          earnedYield:  0,
+          depositedAt:  result.deposited_at,
+          currentValue: result.amount_usdc,
+        },
       }));
+
+      // Deduct from wallet balance immediately
+      dispatch(updateBalance({ balance: Math.max(0, walletBalance - amount) }));
+
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Deposit failed";
       setError(msg);
-      dispatch(resetDepositFlow());
-      dispatch(dismissLoading());
-      dispatch(addToast({ type: "error", title: "Deposit Failed", message: msg }));
+      console.error("[deposit] failed:", err);
+    } finally {
+      setIsPending(false);
     }
-  }, [dispatch, walletAddress, walletBalance]);
+  }, [walletAddress, walletBalance, dispatch]);
 
-  const reset = useCallback(() => {
-    dispatch(resetDepositFlow());
-    setStepMessage("");
-    setError(null);
-  }, [dispatch]);
-
-  return {
-    deposit,
-    reset,
-    isPending: depositTxPending,
-    txHash: depositTxHash,
-    success: depositSuccess,
-    stepMessage,
-    error,
-    deposits,
-  };
+  return { executeDeposit, isPending, error };
 }

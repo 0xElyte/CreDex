@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useZKProof } from "@/hooks/useZKProof";
 import { ProgressBar } from "@/components/ui";
 import { clsx } from "clsx";
@@ -32,6 +33,7 @@ function CopyBtn({ text }: { text: string }) {
 }
 
 export function ZKProofModal({ onClose }: { onClose: () => void }) {
+  const router = useRouter();
   const {
     step, progress, txHash, proofHash,
     stepLog, cairoStep, totalCairoSteps,
@@ -185,12 +187,24 @@ export function ZKProofModal({ onClose }: { onClose: () => void }) {
           {/* Actions */}
           <div className="flex gap-3 pt-1">
             {isConfirmed && (
-              <button
-                onClick={handleClose}
-                className="flex-1 bg-white text-black font-mono text-sm tracking-widest uppercase py-3 hover:bg-[#e8e8e8] transition-colors"
-              >
-                View Loan →
-              </button>
+              <>
+                <button
+                  onClick={() => {
+                    reset();
+                    onClose();
+                    router.push("/app/portfolio");
+                  }}
+                  className="flex-1 bg-white text-black font-mono text-sm tracking-widest uppercase py-3 hover:bg-[#e8e8e8] transition-colors"
+                >
+                  View in Portfolio →
+                </button>
+                <button
+                  onClick={handleClose}
+                  className="border border-white/[0.14] text-[#aaa] font-mono text-sm tracking-widest uppercase px-4 py-3 hover:text-white hover:border-white/30 transition-colors"
+                >
+                  Stay
+                </button>
+              </>
             )}
             {isFailed && (
               <button

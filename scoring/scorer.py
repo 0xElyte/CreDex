@@ -377,16 +377,39 @@ class CreditScorer:
             raw_total = int(raw_total)
 
         # ── Testnet base score ────────────────────────────────────────────────
-        # New Sepolia wallets have no DeFi history → would score 0 → Denied.
-        # Apply a Bronze floor (400) on Sepolia for wallets with no activity
-        # so demo/testing works without seeding on-chain transactions.
+        # Sepolia wallets rarely have DeFi history — most activity is just
+        # general transactions with no protocol interactions.
+        #
+        # Scoring tiers for testnet:
+        #   - World ID verified           → Silver floor (500 pts) = $2000 limit
+        #   - Has transactions (>0)       → Bronze floor (400 pts) = $500 limit
+        #   - Active wallet (>10 txs)     → Bronze+ floor (430 pts) = $500 limit
+        #   - Aged wallet (>180 days)     → Bronze+ floor (450 pts) = $500 limit
+        #   - No activity at all          → Bronze floor (400 pts)
+        #
         # Remove this block before mainnet deployment.
-        is_sepolia         = chain_id == 11155111
-        has_any_activity   = total_transactions > 0 or wallet_age_days > 0
-        if is_sepolia and not has_any_activity:
-            floor     = 400 + world_id_bonus   # World ID = Silver (500)
-            raw_total = max(raw_total, floor)
-            log.info(f"Testnet base score applied for {wallet}: raw={raw_total}")
+        is_sepolia = chain_id == 11155111
+        if is_sepolia:
+            if world_id_bonus > 0:
+                # World ID verified → Silver tier minimum
+                floor = 500
+            elif total_transactions >= 10 and wallet_age_days >= 180:
+                # Active aged wallet → strong Bronze
+                floor = 450
+            elif total_transactions > 0 or wallet_age_days > 30:
+                # Has some on-chain history → Bronze
+                floor = 400
+            else:
+                # Brand new wallet → Bronze floor for testing
+                floor = 400
+
+            if raw_total < floor:
+                log.info(
+                    f"Testnet score floor applied for {wallet}: "
+                    f"raw={raw_total} → floor={floor} "
+                    f"(txs={total_transactions}, age={wallet_age_days}d, world_id={world_id_bonus>0})"
+                )
+                raw_total = floor
 
         final_score = max(0, min(1000, raw_total))
         tier, loan_terms = self._resolve_tier(final_score)

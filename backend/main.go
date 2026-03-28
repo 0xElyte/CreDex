@@ -22,24 +22,25 @@ func main() {
 	}
 
 	// ── Startup warnings ──────────────────────────────────────────────────────
-	checkEnv("TELEGRAM_BOT_TOKEN",          "Telegram notifications disabled")
-	checkEnv("ALCHEMY_API_KEY",              "Scoring engine will use demo Alchemy key (rate limited)")
-	checkEnv("STARKNET_RPC_URL",             "Starknet credit validation will be mocked")
-	checkEnv("STARKNET_VERIFIER_ADDRESS",    "Starknet credit validation will be mocked")
-	checkEnv("EVM_RPC_URL",                  "EVM relay transactions will be mocked")
-	checkEnv("RELAYED_VERIFIER_ADDRESS",     "EVM relay transactions will be mocked")
-	checkEnv("RELAYER_PRIVATE_KEY",          "EVM relay transactions will be mocked")
-	checkEnv("LENDING_CONTRACT_ADDRESS",     "On-chain loan submission will target zero address")
-	checkEnv("FILECOIN_API_KEY",             "Filecoin storage will be mocked")
+	checkEnv("TELEGRAM_BOT_TOKEN", "Telegram notifications disabled")
+	checkEnv("ALCHEMY_API_KEY", "Scoring engine will use demo Alchemy key (rate limited)")
+	checkEnv("STARKNET_RPC_URL", "Starknet credit validation will be mocked")
+	checkEnv("STARKNET_VERIFIER_ADDRESS", "Starknet credit validation will be mocked")
+	checkEnv("EVM_RPC_URL", "EVM relay transactions will be mocked")
+	checkEnv("RELAYED_VERIFIER_ADDRESS", "EVM relay transactions will be mocked")
+	checkEnv("RELAYER_PRIVATE_KEY", "EVM relay transactions will be mocked")
+	checkEnv("LENDING_CONTRACT_ADDRESS", "On-chain loan submission will target zero address")
+	checkEnv("FILECOIN_API_KEY", "Filecoin storage will be mocked")
 
 	// ── Initialise all dependencies ───────────────────────────────────────────
-	appStore     := store.New()
-	fheClient    := fhe.NewRelayerClient()
-	zkProver     := relayer.NewZKProver()
-	chainSub     := chain.NewSubmitter()
-	filecoinStr  := chain.NewFilecoinStore()
-	starknetCli  := relayer.NewStarknetClient()
-	evmRelayer   := chain.NewRelayer()
+	appStore := store.New()
+	fheClient := fhe.NewRelayerClient()
+	zkProver := relayer.NewZKProver()
+	chainSub := chain.NewSubmitter()
+	filecoinStr := chain.NewFilecoinStore()
+	starknetCli := relayer.NewStarknetClient()
+	evmRelayer := chain.NewRelayer()
+	lendingCaller := chain.NewLendingCaller(evmRelayer)
 
 	// ── Background: mark overdue loans every hour ─────────────────────────────
 	go func() {
@@ -72,6 +73,7 @@ func main() {
 		Filecoin: filecoinStr,
 		Starknet: starknetCli,
 		Relay:    evmRelayer,
+		Lending:  lendingCaller,
 	}
 
 	// ── Routes ────────────────────────────────────────────────────────────────
@@ -79,14 +81,16 @@ func main() {
 
 	api := r.Group("/api/v1")
 	{
-		api.POST("/score",               h.ComputeScore)
-		api.GET("/score/:wallet",        h.GetScore)
-		api.POST("/loan/request",        h.RequestLoan)
-		api.GET("/loan/status/:wallet",  h.GetLoanStatus)
-		api.POST("/loan/repay",          h.RepayLoan)
-		api.POST("/wallet/register",     h.RegisterWallet)
-		api.GET("/tiers",                h.GetTiers)
-		api.POST("/notify",              h.SendNotification)
+		api.POST("/score", h.ComputeScore)
+		api.GET("/score/:wallet", h.GetScore)
+		api.POST("/loan/request", h.RequestLoan)
+		api.GET("/loan/status/:wallet", h.GetLoanStatus)
+		api.POST("/loan/repay", h.RepayLoan)
+		api.POST("/wallet/register", h.RegisterWallet)
+		api.GET("/tiers", h.GetTiers)
+		api.POST("/notify", h.SendNotification)
+		api.POST("/deposit", h.Deposit)
+		api.GET("/deposit/:wallet", h.GetDeposits)
 	}
 
 	port := os.Getenv("PORT")

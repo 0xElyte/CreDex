@@ -1,43 +1,46 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
+import type { PoolStats } from "@/types";
 import {
   fetchPoolStats, fetchActivityFeed,
   fetchCreditScore, fetchCollateralOptions,
 } from "@/lib/api";
 import { useAppSelector } from "@/store/hooks";
 
-// Pool stats — mocked (no backend equivalent)
+// Pool stats — APY real from tiers, active loans real from wallet
 export function usePoolStats() {
-  return useQuery({
-    queryKey: ["pool-stats"],
-    queryFn:  fetchPoolStats,
-    refetchInterval: 10_000,
-    staleTime:        8_000,
+  const address = useAppSelector((s) => s.wallet.address);
+  return useQuery<PoolStats>({
+    queryKey: ["pool-stats", address],
+    queryFn:  () => fetchPoolStats(address ?? undefined),
+    refetchInterval: 15_000,
+    staleTime:       10_000,
   });
 }
 
-// Activity feed — mocked
+// Activity feed — real wallet events + deterministic background activity
 export function useActivityFeed() {
+  const address = useAppSelector((s) => s.wallet.address);
   return useQuery({
-    queryKey: ["activity-feed"],
-    queryFn:  fetchActivityFeed,
-    refetchInterval: 6_000,
-    staleTime:        5_000,
+    queryKey: ["activity-feed", address],
+    queryFn:  () => fetchActivityFeed(address ?? undefined),
+    refetchInterval: 30_000, // refresh every 30s (hourly seed means no flicker)
+    staleTime:       25_000,
   });
 }
 
-// Credit score — real backend, keyed on wallet address
+// Credit score — real Go backend → Python scorer → Alchemy
 export function useCreditScore() {
   const address = useAppSelector((s) => s.wallet.address);
   return useQuery({
     queryKey: ["credit-score", address],
     queryFn:  () => fetchCreditScore(address ?? undefined),
-    staleTime: Infinity, // score doesn't change during a session
-    enabled:   true,     // always run (returns fallback when no wallet)
+    staleTime: Infinity,
+    enabled:   true,
   });
 }
 
-// Collateral options — mocked (price oracle not in Go backend)
+// Collateral prices — no price oracle in backend, use stable values
 export function useCollateralOptions() {
   return useQuery({
     queryKey: ["collateral-options"],

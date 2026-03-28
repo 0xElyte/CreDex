@@ -2,7 +2,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState, useCallback } from "react";
 import { fetchPortfolioStats, fetchScoreHistory, fetchCreditEvents, revealScore } from "@/lib/api";
-import { useAppSelector } from "@/store/hooks";
+import { useAppSelector, useAppDispatch } from "@/store/hooks";
+import { setRevealedScore } from "@/store/walletSlice";
 
 export function usePortfolio() {
   const loans    = useAppSelector((s) => s.finance.loans);
@@ -33,19 +34,22 @@ export function useScoreHistory() {
 }
 
 export function useRevealScore() {
-  const address = useAppSelector((s) => s.wallet.address);
-  const [isRevealing,  setIsRevealing]  = useState(false);
-  const [revealedScore, setRevealedScore] = useState<number | null>(null);
+  const address  = useAppSelector((s) => s.wallet.address);
+  const dispatch = useAppDispatch();
+  const [isRevealing,   setIsRevealing]   = useState(false);
+  const [revealedScore, setLocalRevealed] = useState<number | null>(null);
 
   const reveal = useCallback(async () => {
     setIsRevealing(true);
     try {
       const { numericScore } = await revealScore(address ?? undefined);
-      setRevealedScore(numericScore);
+      setLocalRevealed(numericScore);
+      // Also store in Redux so chart can use it
+      dispatch(setRevealedScore(numericScore));
     } finally {
       setIsRevealing(false);
     }
-  }, [address]);
+  }, [address, dispatch]);
 
   return { reveal, isRevealing, revealedScore };
 }

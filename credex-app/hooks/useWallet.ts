@@ -11,9 +11,11 @@ import type { CreditTier, Loan } from "@/types";
 // ─── USDC contract addresses ──────────────────────────────────────────────────
 // Circle's official USDC on each network
 const USDC_CONTRACTS: Record<string, string> = {
-  "0xaa36a7": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Sepolia
+  "0xaa36a7": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Sepolia (11155111)
   "0x1":      "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // Mainnet
   "0x89":     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", // Polygon
+  "0x106a":   "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Sepolia alt chain ID
+  "0x14a34":  "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Base Sepolia
 };
 
 // balanceOf(address) selector = keccak256("balanceOf(address)")[0:4]
@@ -77,6 +79,7 @@ function hasEthereum(): boolean {
 function goLoansToFrontend(
   goLoans: Awaited<ReturnType<typeof backendApi.getLoanStatus>>["active_loans"]
 ): Loan[] {
+  if (!goLoans) return []; // Go returns null for empty arrays
   return goLoans.map((l) => ({
     id:               l.loan_id,
     borrowedAmount:   l.amount_usdc,
@@ -99,20 +102,42 @@ async function loadLoansFromBackend(
   dispatch: ReturnType<typeof useAppDispatch>
 ) {
   try {
-    const status = await backendApi.getLoanStatus(address);
+    const [loanStatus, depositStatus] = await Promise.all([
+      backendApi.getLoanStatus(address),
+      backendApi.getDeposits(address).catch(() => null),
+    ]);
+
     const allLoans = [
-      ...goLoansToFrontend(status.active_loans),
-      ...goLoansToFrontend(status.loan_history),
+      ...goLoansToFrontend(loanStatus.active_loans),
+      ...goLoansToFrontend(loanStatus.loan_history),
     ];
     dispatch(setLoans(allLoans));
+
+    // Load real deposit positions if any exist
+    if (depositStatus?.deposits?.length) {
+      const { confirmDeposit: confirm } = await import("@/store/financeSlice");
+      for (const d of depositStatus.deposits) {
+        dispatch(confirm({
+          txHash:   d.tx_hash,
+          position: {
+            id:           d.deposit_id,
+            amount:       d.amount_usdc,
+            sharePercent: d.share_percent,
+            earnedYield:  d.earned_yield,
+            depositedAt:  d.deposited_at,
+            currentValue: d.current_value,
+          },
+        }));
+      }
+    }
   } catch (err) {
-    console.warn("[wallet] Failed to load loans from backend:", err);
+    console.warn("[wallet] Failed to load from backend:", err);
     dispatch(setLoans([]));
   }
 }
 
 async function postConnect(address: string): Promise<CreditTier> {
-  backendApi.registerWallet(address, 0).catch((err) => {
+  backendApi.registerWallet(address).catch((err) => {
     console.warn("[wallet] register failed (non-fatal):", err);
   });
   try {
