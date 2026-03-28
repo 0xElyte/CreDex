@@ -136,9 +136,36 @@ async function loadLoansFromBackend(
   }
 }
 
+async function getTelegramChatId(): Promise<number> {
+  // Polls Telegram getUpdates to find the chat ID for this session
+  // User must have sent /start to @LendrDexbot for this to work
+  try {
+    const res = await fetch(
+      "https://api.telegram.org/bot8756847568:AAH2icdirW2jkuWfp_naSQAwjfquodVgDz0/getUpdates?limit=1&offset=-1"
+    );
+    const data = await res.json();
+    const updates = data?.result;
+    if (updates && updates.length > 0) {
+      const chatId = updates[0]?.message?.chat?.id;
+      if (chatId) {
+        console.info("[wallet] Telegram chat ID:", chatId);
+        return chatId;
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+  return 0;
+}
+
 async function postConnect(address: string): Promise<CreditTier> {
-  backendApi.registerWallet(address).catch((err) => {
-    console.warn("[wallet] register failed (non-fatal):", err);
+  // Register wallet — include Telegram chat ID if available
+  getTelegramChatId().then((chatId) => {
+    if (chatId) {
+      backendApi.registerWallet(address, chatId).catch((err) => {
+        console.warn("[wallet] register with telegram failed:", err);
+      });
+    }
   });
   try {
     const score = await backendApi.getScore(address);
