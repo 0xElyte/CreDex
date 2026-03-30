@@ -12,8 +12,6 @@
 import type {
   BorrowRequestPayload,
   BorrowRequestResult,
-  DepositPayload,
-  DepositResult,
   PoolStats,
   ActivityItem,
   CreditScore,
@@ -29,9 +27,172 @@ import { backendApi, type GoScoreResponse } from "@/lib/backendApi";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function mockTxHash() {
-  return "0x" + Array.from({ length: 64 }, () =>
-    Math.floor(Math.random() * 16).toString(16)).join("");
+type EthereumProvider = {
+  request(args: { method: string; params?: unknown[] }): Promise<unknown>;
+};
+
+type TransactionReceipt = {
+  status?: string;
+  logs?: Array<{ topics?: string[] }>;
+};
+
+// ─── On-chain TVL ─────────────────────────────────────────────────────────────
+const MUSDC_ADDRESS    = "0x0ed7269d9Cc82b16E9E6D0f40c3bbF64c6Be17c2";
+const MCOLL_ADDRESS    = "0x9fCEdCaabD88C303e041fa492c5c056377DdAF59";
+const LENDING_CONTRACT = "0xf32A9AA02B2cb24676927BF5BC8D8001d6b76476";
+const APPROVE_SELECTOR = "0x095ea7b3";
+const REQUEST_LOAN_SELECTOR = "0x1ba71050";
+const LOAN_APPROVED_TOPIC = "0x94aaf08546b4eeb75db03fe1f6f7a58122cfa6a6fd18b0b329a12f5711ff3ce0";
+
+function getEthereumProvider(): EthereumProvider | undefined {
+  return typeof window !== "undefined"
+    ? (window as { ethereum?: EthereumProvider }).ethereum
+    : undefined;
+}
+
+function requireEthereumProvider(): EthereumProvider {
+  const ethereum = getEthereumProvider();
+  if (!ethereum) {
+    throw new Error("MetaMask is required to post collateral and borrow.");
+  }
+  return ethereum;
+}
+
+function strip0x(hex: string): string {
+  return hex.startsWith("0x") ? hex.slice(2) : hex;
+}
+
+function encodeUint256(value: bigint): string {
+  return value.toString(16).padStart(64, "0");
+}
+
+function encodeAddress(value: string): string {
+  return strip0x(value).toLowerCase().padStart(64, "0");
+}
+
+function encodeBytes(hexValue: string): string {
+  const clean = strip0x(hexValue);
+  const byteLength = BigInt(clean.length / 2);
+  const paddedLength = Math.ceil(clean.length / 64) * 64;
+  return `${encodeUint256(byteLength)}${clean.padEnd(paddedLength, "0")}`;
+}
+
+function buildApproveCalldata(spender: string, amount: bigint): string {
+  return `${APPROVE_SELECTOR}${encodeAddress(spender)}${encodeUint256(amount)}`;
+}
+
+function buildRequestLoanCalldata(principalAmount: bigint, collateralAmount: bigint, proofDataHex: string): string {
+  const head = `${encodeUint256(principalAmount)}${encodeUint256(collateralAmount)}${encodeUint256(BigInt(96))}`;
+  return `${REQUEST_LOAN_SELECTOR}${head}${encodeBytes(proofDataHex)}`;
+}
+
+function toTokenUnits(amount: number, decimals = 6, rounding: "round" | "ceil" = "round"): bigint {
+  const factor = 10 ** decimals;
+  const scaled = rounding === "ceil"
+    ? Math.ceil(amount * factor)
+    : Math.round(amount * factor);
+  return BigInt(scaled);
+}
+
+async function sendTransaction(from: string, to: string, data: string): Promise<string> {
+  const ethereum = requireEthereumProvider();
+  return await ethereum.request({
+    method: "eth_sendTransaction",
+    params: [{ from, to, data }],
+  }) as string;
+}
+
+async function waitForTransactionReceipt(txHash: string, timeoutMs = 120_000): Promise<TransactionReceipt> {
+  const ethereum = requireEthereumProvider();
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const receipt = await ethereum.request({
+      method: "eth_getTransactionReceipt",
+      params: [txHash],
+    }) as TransactionReceipt | null;
+
+    if (receipt) {
+      return receipt;
+    }
+
+    await delay(1500);
+  }
+
+  throw new Error("Timed out waiting for on-chain confirmation.");
+}
+
+function assertReceiptSucceeded(receipt: TransactionReceipt, failureMessage: string): void {
+  if (!receipt.status || BigInt(receipt.status) === BigInt(0)) {
+    throw new Error(failureMessage);
+  }
+}
+
+function parseSolidityLoanId(receipt: TransactionReceipt): number | undefined {
+  const matchingLog = receipt.logs?.find((log) =>
+    log.topics?.[0]?.toLowerCase() === LOAN_APPROVED_TOPIC &&
+    typeof log.topics?.[1] === "string"
+  );
+
+  if (!matchingLog?.topics?.[1]) {
+    return undefined;
+  }
+
+  const value = BigInt(matchingLog.topics[1]);
+  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : undefined;
+}
+
+function toUserFacingError(error: unknown, fallback: string): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("4001") || /user rejected|user denied/i.test(message)) {
+    return new Error("Transaction rejected in wallet.");
+  }
+  return error instanceof Error ? error : new Error(fallback);
+}
+
+async function fetchOnChainTVL(): Promise<number> {
+  try {
+    const eth = typeof window !== "undefined"
+      ? (window as { ethereum?: { request(a: { method: string; params?: unknown[] }): Promise<unknown> } }).ethereum
+      : undefined;
+    if (!eth) return 0;
+    // balanceOf(address) selector: 0x70a08231
+    const data = "0x70a08231" + LENDING_CONTRACT.slice(2).toLowerCase().padStart(64, "0");
+    const hex = await eth.request({ method: "eth_call", params: [{ to: MUSDC_ADDRESS, data }, "latest"] }) as string;
+    return parseInt(hex, 16) / 1e6; // mUSDC has 6 decimals
+  } catch {
+    return 0;
+  }
+}
+
+// Reads the ERC-20 symbol() from the lending asset contract on-chain
+export async function fetchLendingAsset(): Promise<string> {
+  try {
+    const eth = typeof window !== "undefined"
+      ? (window as { ethereum?: { request(a: { method: string; params?: unknown[] }): Promise<unknown> } }).ethereum
+      : undefined;
+    if (!eth) return "USDC";
+    // symbol() selector: 0x95d89b41
+    const hex = await eth.request({
+      method: "eth_call",
+      params: [{ to: MUSDC_ADDRESS, data: "0x95d89b41" }, "latest"],
+    }) as string;
+    if (!hex || hex === "0x") return "USDC";
+    // ABI-decode: 32-byte offset + 32-byte length + UTF-8 data
+    const data = hex.startsWith("0x") ? hex.slice(2) : hex;
+    const length = parseInt(data.slice(64, 128), 16);
+    if (!length || length > 64) return "USDC";
+    const strHex = data.slice(128, 128 + length * 2);
+    let symbol = "";
+    for (let i = 0; i < strHex.length; i += 2) {
+      const code = parseInt(strHex.slice(i, i + 2), 16);
+      if (code === 0) break;
+      symbol += String.fromCharCode(code);
+    }
+    return symbol || "USDC";
+  } catch {
+    return "USDC";
+  }
 }
 
 // Maps the Go tier string → frontend CreditTier
@@ -104,7 +265,7 @@ export async function fetchPoolStats(walletAddress?: string): Promise<PoolStats>
     }
     const lenderAPY = totalWeight > 0
       ? Math.round((weightedAPY / totalWeight) * 100) / 100
-      : 14.82;
+      : 0;
 
     // ── Real loan metrics from connected wallet ───────────────────────────
     let activeLoansCount  = 0;
@@ -125,15 +286,13 @@ export async function fetchPoolStats(walletAddress?: string): Promise<PoolStats>
       defaultRate = totalLoans > 0 ? defaultedLoans / totalLoans : 0;
     }
 
-    // ── Protocol-level TVL (testnet pool size) ────────────────────────────
-    // This is the total liquidity in the Lendr testnet pool.
-    // In production this would come from on-chain contract state.
-    const TVL = 142_509_211;
+    // ── Real on-chain TVL: mUSDC balance of CredexLending contract ──────────────
+    const TVL = await fetchOnChainTVL();
 
     // Utilization = active loans / TVL (real ratio when wallet is connected)
-    const utilizationRate = activeLoanValueUSDC > 0
+    const utilizationRate = activeLoanValueUSDC > 0 && TVL > 0
       ? Math.min(0.95, activeLoanValueUSDC / TVL)
-      : 0.75; // fallback when no active loans
+      : 0;
 
     return {
       tvl:             TVL,
@@ -147,12 +306,12 @@ export async function fetchPoolStats(walletAddress?: string): Promise<PoolStats>
 
   } catch {
     return {
-      tvl:             142_509_211,
-      apy:             14.82,
+      tvl:             0,
+      apy:             0,
       activeLoans:     0,
       defaultRate:     0,
       utilizationRate: 0,
-      availableCash:   142_509_211,
+      availableCash:   0,
       activeLoanValue: 0,
     };
   }
@@ -161,124 +320,38 @@ export async function fetchPoolStats(walletAddress?: string): Promise<PoolStats>
 /**
  * fetchActivityFeed
  * ─────────────────────────────────────────────────────────────
- * Builds the activity feed from real + deterministic sources:
- *
- *   REAL events (wallet parameter provided):
- *   - Wallet loan opens, repayments, defaults from Go backend
- *
- *   DETERMINISTIC background activity (no random noise):
- *   - Protocol-level events seeded from current hour
- *   - Same events shown for same hour to all users (consistent feel)
- *   - Represents real-world DeFi protocol activity patterns
- *
- * No pure random — everything is either real or deterministic.
+ * Returns real wallet events from the Go backend only.
+ * Shows loan opens and repayments from the connected wallet's history.
  */
-
-// Deterministic seeded random — same seed = same sequence
-function seededRand(seed: number): () => number {
-  let s = seed;
-  return () => {
-    s = (s * 1664525 + 1013904223) & 0xffffffff;
-    return (s >>> 0) / 0xffffffff;
-  };
-}
-
-function deterministicAddress(rand: () => number): string {
-  const hex = Array.from({ length: 4 }, () =>
-    Math.floor(rand() * 256).toString(16).padStart(2, "0")
-  ).join("");
-  return `0x${hex}...${Math.floor(rand() * 0xffff).toString(16).padStart(4, "0")}`;
-}
-
-function deterministicTxHash(rand: () => number): string {
-  return "0x" + Array.from({ length: 32 }, () =>
-    Math.floor(rand() * 256).toString(16).padStart(2, "0")
-  ).join("");
-}
-
-const BACKGROUND_TEMPLATES = [
-  { type: "loan_funded"           as const, tier: "Gold"     as const, amount: 3500,   asset: "USDC", label: "Loan Funded" },
-  { type: "loan_funded"           as const, tier: "Silver"   as const, amount: 1200,   asset: "USDC", label: "Loan Funded" },
-  { type: "repayment"             as const, tier: "Gold"     as const, amount: 2800,   asset: "USDC", label: "Repayment Made" },
-  { type: "repayment"             as const, tier: "Platinum" as const, amount: 9500,   asset: "USDC", label: "Repayment Made" },
-  { type: "borrower_verified"     as const, tier: "Bronze"   as const,                               label: "Borrower Verified" },
-  { type: "borrower_verified"     as const, tier: "Silver"   as const,                               label: "Borrower Verified" },
-  { type: "interest_distribution" as const,                             amount: 1842.5, asset: "USDC", label: "Interest Distribution" },
-  { type: "deposit"               as const, tier: "Silver"   as const, amount: 5000,   asset: "USDC", label: "Liquidity Deposited" },
-];
-
 export async function fetchActivityFeed(walletAddress?: string): Promise<ActivityItem[]> {
   const items: ActivityItem[] = [];
 
-  // ── Real wallet events from Go backend ───────────────────────────────────
   if (walletAddress) {
     try {
       const status = await backendApi.getLoanStatus(walletAddress);
       const allLoans = [...(status.active_loans ?? []), ...(status.loan_history ?? [])]
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        .slice(0, 3); // show latest 3 real events
+        .slice(0, 8);
 
+      const shortAddr = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
       for (const loan of allLoans) {
-        const shortAddr = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
-        if (loan.status === "repaid") {
-          items.push({
-            id:        `real-repay-${loan.loan_id}`,
-            type:      "repayment",
-            address:   shortAddr,
-            tier:      loan.tier as import("@/types").CreditTier,
-            amount:    loan.amount_usdc,
-            asset:     "USDC",
-            label:     "You Repaid",
-            timestamp: loan.created_at,
-            txHash:    loan.tx_hash ?? mockTxHash(),
-          });
-        } else {
-          items.push({
-            id:        `real-loan-${loan.loan_id}`,
-            type:      "loan_funded",
-            address:   shortAddr,
-            tier:      loan.tier as import("@/types").CreditTier,
-            amount:    loan.amount_usdc,
-            asset:     "USDC",
-            label:     "You Borrowed",
-            timestamp: loan.created_at,
-            txHash:    loan.tx_hash ?? mockTxHash(),
-          });
-        }
+        items.push({
+          id:        loan.status === "repaid" ? `real-repay-${loan.loan_id}` : `real-loan-${loan.loan_id}`,
+          type:      loan.status === "repaid" ? "repayment" : "loan_funded",
+          address:   shortAddr,
+          tier:      loan.tier as CreditTier,
+          amount:    loan.amount_usdc,
+          asset:     "USDC",
+          label:     loan.status === "repaid" ? "You Repaid" : "You Borrowed",
+          timestamp: loan.created_at,
+          txHash:    loan.tx_hash ?? "",
+        });
       }
     } catch {
-      // Backend unreachable — skip real events, show only background
+      // backend unreachable
     }
   }
 
-  // ── Deterministic background activity ────────────────────────────────────
-  // Seed from current hour so events are stable within a session
-  // but refresh each hour giving a "live feed" feel
-  const hourSeed = Math.floor(Date.now() / (1000 * 60 * 60));
-  const rand = seededRand(hourSeed);
-
-  const needed = Math.max(0, 8 - items.length);
-  for (let i = 0; i < needed; i++) {
-    const idx      = Math.floor(rand() * BACKGROUND_TEMPLATES.length);
-    const template = BACKGROUND_TEMPLATES[idx];
-    const minsAgo  = Math.floor(rand() * 55) + (i * 8); // spread over last hour
-
-    items.push({
-      id:        `bg-${hourSeed}-${i}`,
-      type:      template.type,
-      address:   template.type === "interest_distribution"
-                   ? "Protocol Pool"
-                   : deterministicAddress(rand),
-      tier:      template.tier,
-      amount:    template.amount,
-      asset:     template.asset,
-      label:     template.label,
-      timestamp: new Date(Date.now() - minsAgo * 60 * 1000).toISOString(),
-      txHash:    deterministicTxHash(rand),
-    });
-  }
-
-  // Sort by timestamp descending — real events mixed in with background
   return items.sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
@@ -333,24 +406,24 @@ function goScoreToCreditScore(go: GoScoreResponse): CreditScore {
 
 function fallbackCreditScore(): CreditScore {
   return {
-    tier:            "Gold",
-    hash:            "8f3d...912a",
+    tier:            "Bronze",
+    hash:            "----...----",
     encrypted:       true,
     revealed:        false,
     numericScore:    null,
     signals: [
-      { label: "Wallet Age",          value: 92,  weight: 0.20 },
-      { label: "Repayment History",   value: 100, weight: 0.35 },
-      { label: "Liquidation Penalty", value: 96,  weight: 0.20 },
-      { label: "Volume Consistency",  value: 68,  weight: 0.10 },
-      { label: "DeFi Diversity",      value: 84,  weight: 0.10 },
-      { label: "World ID Bonus",      value: 100, weight: 0.05 },
+      { label: "Wallet Age",          value: 0, weight: 0.20 },
+      { label: "Repayment History",   value: 0, weight: 0.35 },
+      { label: "Liquidation Penalty", value: 0, weight: 0.20 },
+      { label: "Volume Consistency",  value: 0, weight: 0.10 },
+      { label: "DeFi Diversity",      value: 0, weight: 0.10 },
+      { label: "World ID Bonus",      value: 0, weight: 0.05 },
     ],
-    maxLTV:          0.65,
-    aprRate:         0.08,
+    maxLTV:          0.35,
+    aprRate:         0.25,
     repaymentStreak: 0,
-    globalRank:      8400,
-    xp:              840,
+    globalRank:      0,
+    xp:              0,
     nextTierXP:      1000,
   };
 }
@@ -374,52 +447,13 @@ export async function revealScore(wallet?: string): Promise<{ numericScore: numb
   }
 }
 
-// ─── Collateral Options — real prices from CoinGecko (no API key needed) ──────
-
-const FALLBACK_PRICES: Record<string, number> = {
-  WETH:  2650,
-  WBTC:  65000,
-  stETH: 2630,
-};
-
-let _priceCache: { prices: Record<string, number>; fetchedAt: number } | null = null;
-const PRICE_CACHE_MS = 60_000; // refresh every 60s
-
-async function fetchLiveAssetPrices(): Promise<Record<string, number>> {
-  if (_priceCache && Date.now() - _priceCache.fetchedAt < PRICE_CACHE_MS) {
-    return _priceCache.prices;
-  }
-  try {
-    const url =
-      "https://api.coingecko.com/api/v3/simple/price" +
-      "?ids=ethereum,bitcoin,staked-ether&vs_currencies=usd";
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) throw new Error(`CoinGecko ${res.status}`);
-    const data = await res.json() as {
-      ethereum?:       { usd: number };
-      bitcoin?:        { usd: number };
-      "staked-ether"?: { usd: number };
-    };
-    const prices: Record<string, number> = {
-      WETH:  data.ethereum?.usd        ?? FALLBACK_PRICES.WETH,
-      WBTC:  data.bitcoin?.usd         ?? FALLBACK_PRICES.WBTC,
-      stETH: data["staked-ether"]?.usd ?? FALLBACK_PRICES.stETH,
-    };
-    _priceCache = { prices, fetchedAt: Date.now() };
-    console.info("[api] Live prices fetched:", prices);
-    return prices;
-  } catch (err) {
-    console.warn("[api] CoinGecko fetch failed, using cached/fallback prices:", err);
-    return _priceCache?.prices ?? FALLBACK_PRICES;
-  }
-}
+// ─── Collateral Options ────────────────────────────────────────────────────────
 
 export async function fetchCollateralOptions(): Promise<CollateralOption[]> {
-  const prices = await fetchLiveAssetPrices();
   return [
-    { asset: "WETH",  available: 22.45, usdPrice: prices.WETH,  ltv: 0.80 },
-    { asset: "WBTC",  available: 1.2,   usdPrice: prices.WBTC,  ltv: 0.75 },
-    { asset: "stETH", available: 18.0,  usdPrice: prices.stETH, ltv: 0.78 },
+    // mCOLL is a mock ERC-20 deployed on Sepolia (6 decimals, pegged $1)
+    // Contract: 0x9fCEdCaabD88C303e041fa492c5c056377DdAF59
+    { asset: "mCOLL", available: 1_000_000, usdPrice: 1.00, ltv: 0.80 },
   ];
 }
 
@@ -461,13 +495,12 @@ export async function executeBorrow(
   // ── Phase 3: Cairo VM simulation (runs concurrently with the real API call) ─
   const cairoSimPromise = runCairoSimulation(onLog, onCairoStep);
 
-  // ── Phase 4: Real API call to Go backend ───────────────────────────────────
-  // Run Cairo simulation and real API call concurrently.
-  // If API fails, throw with the Go backend's error message (not a generic one).
+  // ── Phase 4: Preflight API call to Go backend ─────────────────────────────
+  // Run Cairo simulation and credit preflight concurrently.
   const apiPromise = backendApi.requestLoan(
     payload.walletAddress,
     payload.amount,
-    11155111,
+    parseInt(await requireEthereumProvider().request({ method: "eth_chainId" }) as string, 16),
   ).catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
     // Surface meaningful errors from Go backend
@@ -489,21 +522,18 @@ export async function executeBorrow(
   // Wait for both — Cairo sim is deterministic timing, API is real
   const [, result] = await Promise.all([cairoSimPromise, apiPromise]);
 
-  // ── Phase 5: EVM relay (logged) ────────────────────────────────────────────
-  const relayTx = result.relay_tx_hash || mockTxHash();
-  onTxHash(relayTx);
-  onLog(`RELAY_TX: ${relayTx.slice(0, 24)}... → RelayedCreditVerifier`);
+  // ── Phase 5: Relay complete — borrower must now approve and borrow ───────
+  const relayTx = result.relay_tx_hash || "";
+  onLog(`RELAY_TX: ${relayTx ? relayTx.slice(0, 24) + "..." : "(pending)"} → RelayedCreditVerifier`);
   await delay(400);
   onLog(`ProofID: ${(result.proof_id || "").slice(0, 24)}...`);
   await delay(300);
-  onLog("Proof relayed to EVM. Loan record created on-chain.");
+  onLog("Proof relayed to EVM. Borrower wallet signature required for collateralized loan request.");
   await delay(200);
 
   if (result.filecoin_cid) {
     onLog(`Filecoin CID: ${result.filecoin_cid.slice(0, 20)}...`);
   }
-
-  onLog(`✓ Loan approved — ${result.loan_id}`);
 
   // ── Map Go response → frontend BorrowRequestResult ─────────────────────────
   const collateralRequired = computeCollateralRequired(
@@ -512,18 +542,78 @@ export async function executeBorrow(
     result.collateral_pct,
   );
 
+  if (!result.proof_data) {
+    throw new Error("Backend did not return proof data required for on-chain loan origination.");
+  }
+
+  let borrowTxHash = "";
+  let solidityLoanId: number | undefined;
+
+  try {
+    onLog(`Approving ${collateralRequired.toFixed(2)} ${payload.collateralAsset} as collateral...`);
+    const approvalTxHash = await sendTransaction(
+      payload.walletAddress,
+      MCOLL_ADDRESS,
+      buildApproveCalldata(LENDING_CONTRACT, toTokenUnits(collateralRequired, 6, "ceil")),
+    );
+    onLog(`COLLATERAL_APPROVAL_TX: ${approvalTxHash.slice(0, 24)}...`);
+
+    const approvalReceipt = await waitForTransactionReceipt(approvalTxHash);
+    assertReceiptSucceeded(approvalReceipt, "Collateral approval transaction failed.");
+    onLog("Collateral approval confirmed.");
+
+    onLog("Submitting CredexLending.requestLoan() from borrower wallet...");
+    borrowTxHash = await sendTransaction(
+      payload.walletAddress,
+      LENDING_CONTRACT,
+      buildRequestLoanCalldata(
+        toTokenUnits(payload.amount),
+        toTokenUnits(collateralRequired, 6, "ceil"),
+        result.proof_data,
+      ),
+    );
+    onTxHash(borrowTxHash);
+    onLog(`BORROW_TX: ${borrowTxHash.slice(0, 24)}...`);
+
+    const borrowReceipt = await waitForTransactionReceipt(borrowTxHash);
+    assertReceiptSucceeded(borrowReceipt, "Borrow transaction failed on-chain.");
+    solidityLoanId = parseSolidityLoanId(borrowReceipt);
+    if (solidityLoanId !== undefined) {
+      onLog(`On-chain Loan ID: ${solidityLoanId}`);
+    }
+  } catch (error) {
+    throw toUserFacingError(error, "Borrow transaction failed.");
+  }
+
+  onLog("Confirming loan record with backend...");
+  const confirmed = await backendApi.confirmLoan({
+    wallet_address: payload.walletAddress,
+    loan_id: result.loan_id,
+    amount_usdc: payload.amount,
+    collateral_pct: result.collateral_pct,
+    interest_apr: result.interest_apr,
+    tier: result.tier,
+    tx_hash: borrowTxHash,
+    proof_id: result.proof_id,
+    proof_data: result.proof_data,
+    solidity_loan_id: solidityLoanId,
+  });
+
+  onLog(`✓ Loan approved — ${confirmed.loan_id}`);
+
   return {
-    loanId:             result.loan_id,
-    txHash:             relayTx,
-    proofHash:          result.proof_id || mockTxHash(),
-    aprRate:            result.interest_apr / 100,
+    loanId:             confirmed.loan_id,
+    txHash:             borrowTxHash,
+    proofHash:          confirmed.proof_id || result.proof_id || "",
+    aprRate:            confirmed.interest_apr / 100,
     healthFactor:       computeHealthFactor(collateralRequired, payload.collateralAsset, payload.amount),
     collateralRequired,
+    solidityLoanId,
     // Extra fields — stored on the Loan record
-    collateralPct:      result.collateral_pct,
-    dueDate:            result.due_date,
-    onChainConfirmed:   result.on_chain_confirmed,
-    proofData:          result.proof_data,
+    collateralPct:      confirmed.collateral_pct,
+    dueDate:            confirmed.due_date,
+    onChainConfirmed:   confirmed.on_chain_confirmed,
+    proofData:          confirmed.proof_data || result.proof_data,
     filecoinCid:        result.filecoin_cid,
   };
 }
@@ -554,50 +644,23 @@ async function runCairoSimulation(
 
 function computeCollateralRequired(
   amountUSDC: number,
-  asset: "WETH" | "WBTC" | "stETH",
+  asset: "mCOLL",
   collateralPct: number,
 ): number {
-  // Use cached prices if available, fallback otherwise
-  const prices = _priceCache?.prices ?? FALLBACK_PRICES;
-  const price  = prices[asset] ?? FALLBACK_PRICES.WETH;
+  // mCOLL is pegged at $1.00
+  const price = asset === "mCOLL" ? 1.00 : 1.00;
   const collateralUSD = amountUSDC * (collateralPct / 100);
   return collateralUSD / price;
 }
 
 function computeHealthFactor(
   collateralAmount: number,
-  asset: "WETH" | "WBTC" | "stETH",
+  asset: "mCOLL",
   borrowedUSDC: number,
 ): number {
-  const prices     = _priceCache?.prices ?? FALLBACK_PRICES;
-  const collateralUSD = collateralAmount * (prices[asset] ?? FALLBACK_PRICES.WETH);
+  // mCOLL is pegged at $1.00
+  const collateralUSD = collateralAmount * (asset === "mCOLL" ? 1.00 : 1.00);
   return Math.min(3.5, (collateralUSD / borrowedUSDC) * 1.1);
-}
-
-// ─── Deposit — no backend lend endpoint, keep realistic mock ─────────────────
-
-export async function executeDeposit(
-  payload: DepositPayload,
-  onStep: (step: string) => void,
-): Promise<DepositResult> {
-  onStep("Approving USDC spend on StarkNet...");
-  await delay(900);
-  onStep("Broadcasting deposit transaction...");
-  await delay(800);
-  const txHash = mockTxHash();
-  onStep(`TX: ${txHash.slice(0, 20)}...`);
-  await delay(600);
-  onStep("Updating sovereign pool share...");
-  await delay(500);
-  onStep("Confirmed on StarkNet Sepolia.");
-
-  return {
-    txHash,
-    depositedAmount: payload.amount,
-    sharePercent:    payload.amount / 142_509_211,
-    projectedAPY:    14.82,
-    timestamp:       new Date().toISOString(),
-  };
 }
 
 // ─── Portfolio Stats — real Go backend ───────────────────────────────────────
@@ -626,7 +689,7 @@ function goLoanStatusToPortfolioStats(
   return {
     totalBorrowed,
     totalRepaid,
-    totalLent:          0, // lend data not tracked in Go backend
+    totalLent:          0,
     earnedYield:        0,
     protocolRevenue:    totalBorrowed * 0.005,
     globalRank:         s.score > 800 ? 1200 : s.score > 600 ? 8400 : 24000,
@@ -634,6 +697,7 @@ function goLoanStatusToPortfolioStats(
       ? Math.min(100, 90 + s.streak_count * 2)
       : totalRepaid > 0 ? 95 : 100,
     activeObligations:  s.active_loans.length,
+    streakCount:        s.streak_count,
   };
 }
 
@@ -647,26 +711,14 @@ function mockPortfolioStats(): PortfolioStats {
     globalRank:         0,
     reliabilityPercent: 0,
     activeObligations:  0,
+    streakCount:        0,
   };
 }
 
 // ─── Score History — no backend equivalent, keep mock ────────────────────────
 
 export async function fetchScoreHistory(): Promise<ScoreHistoryPoint[]> {
-  await delay(300);
-  const points: ScoreHistoryPoint[] = [];
-  let score = 640;
-  for (let i = 11; i >= 0; i--) {
-    const d = new Date();
-    d.setMonth(d.getMonth() - i);
-    score = Math.min(900, Math.max(580, score + Math.floor((Math.random() - 0.3) * 30)));
-    points.push({
-      date:  d.toISOString().slice(0, 7),
-      score,
-      tier:  score < 700 ? "Bronze" : score < 750 ? "Silver" : score < 820 ? "Gold" : "Platinum",
-    });
-  }
-  return points;
+  return [];
 }
 
 export async function fetchCreditEvents(): Promise<CreditEvent[]> {
@@ -683,5 +735,5 @@ export async function submitRepayment(
   loanId: string,
 ): Promise<{ txHash: string; streak: number }> {
   const result = await backendApi.repayLoan(wallet, loanId);
-  return { txHash: mockTxHash(), streak: result.streak };
+  return { txHash: "", streak: result.streak };
 }

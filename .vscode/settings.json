@@ -1,1 +1,8 @@
-{}
+{
+  "chat.tools.terminal.autoApprove": {
+    "/^python -c \"import fastapi, uvicorn, pydantic, httpx, dotenv; print\\('fastapi:', fastapi\\.__version__\\); print\\('uvicorn:', uvicorn\\.__version__\\); print\\('pydantic:', pydantic\\.__version__\\); print\\('httpx:', httpx\\.__version__\\)\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    }
+  }
+}

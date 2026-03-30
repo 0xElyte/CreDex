@@ -100,16 +100,19 @@ func (lc *LendingCaller) RequestLoan(
 // ── ABI ───────────────────────────────────────────────────────────────────────
 
 // Minimal ABI for CredexLending.requestLoan()
-// Matches: function requestLoan(uint256 amount, uint256 collateralAmount, bytes calldata proofData)
+// Matches: function requestLoan(uint256 principalAmount, uint256 collateralAmount, bytes calldata proofData)
+//         returns (uint256 loanId)
 const lendingABIJSON = `[{
 	"name": "requestLoan",
 	"type": "function",
 	"inputs": [
-		{"name": "amount",           "type": "uint256"},
+		{"name": "principalAmount",  "type": "uint256"},
 		{"name": "collateralAmount", "type": "uint256"},
 		{"name": "proofData",        "type": "bytes"}
 	],
-	"outputs": []
+	"outputs": [
+		{"name": "loanId", "type": "uint256"}
+	]
 }]`
 
 func (lc *LendingCaller) sendRequestLoanTx(

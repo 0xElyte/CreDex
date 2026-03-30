@@ -1,13 +1,14 @@
 "use client";
+import React from "react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useWallet } from "@/hooks/useWallet";
+import { useLendingAsset } from "@/hooks/useQueries";
 import { clsx } from "clsx";
 
 export default function HubPage() {
   const { isConnected, tier, shortAddress } = useWallet();
-  // Mount flag prevents hydration mismatch — content renders server-side visible,
-  // then on client we do the entrance animation
+  const { data: lendingAsset = "USDC" } = useLendingAsset();
 
   // Role state — persisted in sessionStorage so it survives navigation
   const [selectedRole, setSelectedRole] = useState<"borrow" | "lend" | null>(() => {
@@ -55,7 +56,7 @@ export default function HubPage() {
       {/* Cards */}
       <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 gap-px w-full max-w-2xl bg-white/[0.07]">
         <ModeCard
-          num="01" title="Borrow"
+          num="01" title={<><span className="block">Borrow</span><span className="block text-3xl sm:text-4xl font-display text-[#aaa]">{lendingAsset}</span></>}
           desc="Access undercollateralised credit using your ZK-proven credit score. No KYC required."
           stats={[
             { label: "Starting APR", value: "4.2%" },
@@ -68,7 +69,7 @@ export default function HubPage() {
           onSelect={() => selectRole("borrow")}
         />
         <ModeCard
-          num="02" title="Lend"
+          num="02" title={<><span className="block">Lend</span><span className="block text-3xl sm:text-4xl font-display text-[#aaa]">{lendingAsset}</span></>}
           desc="Deposit liquidity and earn institutional-grade yield on sovereign credit positions."
           stats={[
             { label: "APY (Platinum)", value: "14.82%" },
@@ -109,7 +110,7 @@ export default function HubPage() {
 function ModeCard({
   num, title, desc, stats, href, locked, selected, onSelect,
 }: {
-  num: string; title: string; desc: string;
+  num: string; title: React.ReactNode; desc: string;
   stats: { label: string; value: string }[];
   href: string; locked: boolean;
   selected: boolean;

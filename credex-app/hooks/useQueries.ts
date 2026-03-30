@@ -4,6 +4,7 @@ import type { PoolStats } from "@/types";
 import {
   fetchPoolStats, fetchActivityFeed,
   fetchCreditScore, fetchCollateralOptions,
+  fetchLendingAsset,
 } from "@/lib/api";
 import { useAppSelector } from "@/store/hooks";
 
@@ -47,5 +48,15 @@ export function useCollateralOptions() {
     queryFn:  fetchCollateralOptions,
     refetchInterval: 30_000,
     staleTime:        25_000,
+  });
+}
+
+// Lending asset symbol — reads ERC-20 symbol() from mUSDC contract on-chain
+export function useLendingAsset() {
+  return useQuery({
+    queryKey: ["lending-asset"],
+    queryFn:  fetchLendingAsset,
+    staleTime: Infinity, // symbol never changes
+    retry: 2,
   });
 }

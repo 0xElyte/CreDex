@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { usePoolStats, useActivityFeed, useCreditScore } from "@/hooks/useQueries";
+import { usePoolStats, useActivityFeed } from "@/hooks/useQueries";
 import { useDeposit } from "@/hooks/useDeposit";
 import { useWalletGuard } from "@/hooks/useWalletGuard";
 import { useAppSelector, useAppDispatch } from "@/store/hooks";
@@ -9,18 +9,11 @@ import { DepositModal } from "@/components/lend/DepositModal";
 import { StatCard, SectionLabel, ProgressBar, StatusPill } from "@/components/ui";
 import { gsap } from "gsap";
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  ResponsiveContainer,
   PieChart, Pie, Cell,
 } from "recharts";
-import { ChartWrapper } from "@/components/ui/ChartWrapper";
 
-const APY_DATA = [
-  { month:"Jan", apy:11.2 },{ month:"Feb", apy:12.1 },
-  { month:"Mar", apy:11.8 },{ month:"Apr", apy:13.4 },
-  { month:"May", apy:14.0 },{ month:"Jun", apy:13.7 },
-  { month:"Jul", apy:14.2 },{ month:"Aug", apy:14.5 },
-  { month:"Sep", apy:14.7 },{ month:"Oct", apy:14.82 },
-];
+
 
 // ─── Pool Stats ────────────────────────────────────────────────────────────────
 function PoolStatsBar() {
@@ -65,8 +58,8 @@ function DepositForm({ onDeposit, isPending }: { onDeposit: (amount: number) => 
   const { data: pool } = usePoolStats();
   const [amount, setAmount] = useState(10000);
 
-  const apy = pool?.apy ?? 14.82;
-  const tvl = pool?.tvl ?? 142509211;
+  const apy = pool?.apy ?? 0;
+  const tvl = pool?.tvl ?? 0;
   const monthlyYield = (amount * apy / 100) / 12;
   const yearlyYield = amount * apy / 100;
   const sharePercent = (amount / tvl) * 100;
@@ -126,27 +119,11 @@ function DepositForm({ onDeposit, isPending }: { onDeposit: (amount: number) => 
         ))}
       </div>
 
-      {/* APY chart */}
+      {/* Current APY */}
       <div>
-        <SectionLabel>APY History</SectionLabel>
-        <ChartWrapper height={120}>
-        <ResponsiveContainer width="100%" height={120}>
-          <AreaChart data={APY_DATA}>
-            <defs>
-              <linearGradient id="apyGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#fff" stopOpacity={0.06} />
-                <stop offset="95%" stopColor="#fff" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <XAxis dataKey="month" tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
-            <Tooltip
-              contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,.07)", borderRadius: 0, fontFamily: "DM Mono", fontSize: 12 }}
-              labelStyle={{ color: "#555" }} itemStyle={{ color: "#fff" }} />
-            <Area type="monotone" dataKey="apy" stroke="rgba(255,255,255,0.5)" strokeWidth={1.5} fill="url(#apyGrad)" />
-          </AreaChart>
-        </ResponsiveContainer>
-        </ChartWrapper>
+        <SectionLabel>Current APY</SectionLabel>
+        <p className="font-mono text-4xl text-white mt-2">{pool ? `${pool.apy.toFixed(2)}%` : "—"}</p>
+        <p className="font-mono text-xs text-[#777] mt-1">Variable rate · computed from live tier definitions</p>
       </div>
 
       <button
@@ -168,7 +145,7 @@ function DepositForm({ onDeposit, isPending }: { onDeposit: (amount: number) => 
 // ─── Utilization Donut ─────────────────────────────────────────────────────────
 function UtilizationDonut() {
   const { data } = usePoolStats();
-  const utilized = data ? Math.round(data.utilizationRate * 100) : 75;
+  const utilized = data ? Math.round(data.utilizationRate * 100) : 0;
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
@@ -200,8 +177,8 @@ function UtilizationDonut() {
       </div>
       <div className="mt-5 space-y-2">
         {[
-          { label: "Active Loans", col: "bg-white", value: `$${data ? (data.activeLoanValue / 1e6).toFixed(1) : "106.8"}M` },
-          { label: "Available Cash", col: "bg-[#1e1e1e]", value: `$${data ? (data.availableCash / 1e6).toFixed(1) : "35.7"}M` },
+          { label: "Active Loans", col: "bg-white", value: data ? `$${(data.activeLoanValue / 1e6).toFixed(1)}M` : "—" },
+          { label: "Available Cash", col: "bg-[#1e1e1e]", value: data ? `$${(data.availableCash / 1e6).toFixed(1)}M` : "—" },
         ].map((r) => (
           <div key={r.label} className="flex items-center justify-between font-mono text-xs">
             <div className="flex items-center gap-2">
@@ -332,7 +309,6 @@ export default function LendPage() {
 
   const { executeDeposit, isPending, error: depositError } = useDeposit();
   const depositSuccess = useAppSelector((s) => s.finance.depositSuccess);
-  const depositTxHash  = useAppSelector((s) => s.finance.depositTxHash);
   const dispatch       = useAppDispatch();
   const [pendingAmount, setPendingAmount] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);

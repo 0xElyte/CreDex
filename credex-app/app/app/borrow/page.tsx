@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAppSelector, useAppDispatch } from "@/store/hooks";
 import { useZKProof } from "@/hooks/useZKProof";
 import { useCollateralOptions, useCreditScore } from "@/hooks/useQueries";
@@ -19,20 +19,6 @@ import { ChartWrapper } from "@/components/ui/ChartWrapper";
 import type { BorrowRequestPayload } from "@/types";
 import { clsx } from "clsx";
 
-// ─── Repayment chart data ──────────────────────────────────────────────────────
-const REPAY_DATA = [
-  { month: "May", borrowed: 45000, repaid: 10000 },
-  { month: "Jun", borrowed: 57000, repaid: 22000 },
-  { month: "Jul", borrowed: 57000, repaid: 31000 },
-  { month: "Aug", borrowed: 57000, repaid: 40000 },
-  { month: "Sep", borrowed: 57000, repaid: 52000 },
-  { month: "Oct", borrowed: 57000, repaid: 57000 },
-];
-
-const HEALTH_DATA = [
-  { day: "D1", hf: 2.1 }, { day: "D7", hf: 2.0 }, { day: "D14", hf: 1.95 },
-  { day: "D21", hf: 1.88 }, { day: "D28", hf: 1.84 }, { day: "Today", hf: 1.82 },
-];
 
 // ─── Borrow Form ───────────────────────────────────────────────────────────────
 // Backend loan limits (from Go store/store.go)
@@ -44,7 +30,7 @@ function BorrowForm({ onSubmit }: { onSubmit: (p: BorrowRequestPayload) => void 
   const { data: collateral = [] } = useCollateralOptions();
   const { data: score } = useCreditScore();
   const [amount, setAmount] = useState(1000);
-  const [asset, setAsset] = useState<"WETH" | "WBTC" | "stETH">("WETH");
+  const [asset, setAsset] = useState<"mCOLL">("mCOLL");
   const [duration, setDuration] = useState<30 | 60 | 90 | 180>(30);
 
   // Tier-based max: use score.maxLTV to derive cap, but hard cap is $10,000
@@ -102,7 +88,7 @@ function BorrowForm({ onSubmit }: { onSubmit: (p: BorrowRequestPayload) => void 
           >
             {collateral.map((c) => (
               <option key={c.asset} value={c.asset}>
-                {c.asset} — {c.available.toFixed(2)} avail · ${c.usdPrice.toLocaleString()}
+                {c.asset}
               </option>
             ))}
           </select>
@@ -169,6 +155,7 @@ function LoanTable() {
   const dispatch = useAppDispatch();
   const loans = useAppSelector((s) => s.finance.loans);
   const walletAddress = useAppSelector((s) => s.wallet.address);
+  const { data: score } = useCreditScore();
   const { success: toastSuccess, info: toastInfo } = useToast();
   const [repayingId, setRepayingId] = useState<string | null>(null);
 
@@ -193,7 +180,7 @@ function LoanTable() {
       <div className="flex items-center justify-between">
         <p className="font-display text-lg text-white tracking-wide">Active Loan Positions</p>
         <div className="flex items-center gap-4 font-mono text-xs text-[#888]">
-          <span>STREAK: <span className="text-white">412 DAYS 🔥</span></span>
+          <span>STREAK: <span className="text-white">{score?.repaymentStreak ?? 0} DAYS {score?.repaymentStreak ? "🔥" : ""}</span></span>
           <span className="text-[#aaa]">|</span>
           <span>{active.length} ACTIVE · {closed.length} CLOSED</span>
         </div>
@@ -324,6 +311,31 @@ function ScorePanel() {
 // ─── Charts Row ────────────────────────────────────────────────────────────────
 function ChartsRow() {
   const [activeTab, setActiveTab] = useState<"volume" | "health">("volume");
+  const loans = useAppSelector((s) => s.finance.loans);
+
+  const repayChartData = useMemo(() => {
+    if (loans.length === 0) return [];
+    const byMonth = new Map<string, { borrowed: number; repaid: number }>();
+    for (const loan of loans) {
+      const key = loan.openedAt.slice(0, 7);
+      if (!byMonth.has(key)) byMonth.set(key, { borrowed: 0, repaid: 0 });
+      const entry = byMonth.get(key)!;
+      entry.borrowed += loan.borrowedAmount;
+      if (loan.status === "repaid") entry.repaid += loan.borrowedAmount;
+    }
+    return Array.from(byMonth.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, d]) => ({
+        month: new Date(month + "-01").toLocaleString("en", { month: "short" }),
+        borrowed: d.borrowed, repaid: d.repaid,
+      }));
+  }, [loans]);
+
+  const healthChartData = useMemo(() =>
+    loans
+      .filter(l => l.status === "active")
+      .map((l, i) => ({ day: `L${i + 1}`, hf: l.healthFactor })),
+  [loans]);
 
   return (
     <div className="card p-6">
@@ -350,49 +362,50 @@ function ChartsRow() {
       </div>
 
       {activeTab === "volume" && (
-        <ChartWrapper height={200}>
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={REPAY_DATA} barGap={2}>
-            <XAxis dataKey="month" tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false}
-              tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`} />
-            <Tooltip
-              contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,.07)", borderRadius: 0, fontFamily: "DM Mono", fontSize: 12 }}
-              labelStyle={{ color: "#555" }} itemStyle={{ color: "#fff" }}
-              formatter={(v: unknown) => [`$${Number(v).toLocaleString()}`, undefined as never]} />
-            <Bar dataKey="borrowed" name="Borrowed" fill="rgba(255,255,255,0.15)" radius={[1, 1, 0, 0]} />
-            <Bar dataKey="repaid" name="Repaid" fill="rgba(255,255,255,0.06)" radius={[1, 1, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-        </ChartWrapper>
+        repayChartData.length === 0
+          ? <p className="font-mono text-sm text-[#777] py-8 text-center">No loan history yet.</p>
+          : <ChartWrapper height={200}>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={repayChartData} barGap={2}>
+                <XAxis dataKey="month" tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false}
+                  tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`} />
+                <Tooltip
+                  contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,.07)", borderRadius: 0, fontFamily: "DM Mono", fontSize: 12 }}
+                  labelStyle={{ color: "#555" }} itemStyle={{ color: "#fff" }}
+                  formatter={(v: unknown) => [`$${Number(v).toLocaleString()}`, undefined as never]} />
+                <Bar dataKey="borrowed" name="Borrowed" fill="rgba(255,255,255,0.15)" radius={[1, 1, 0, 0]} />
+                <Bar dataKey="repaid" name="Repaid" fill="rgba(255,255,255,0.06)" radius={[1, 1, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+            </ChartWrapper>
       )}
 
       {activeTab === "health" && (
-        <ChartWrapper height={200}>
-        <ResponsiveContainer width="100%" height={200}>
-          <AreaChart data={HEALTH_DATA}>
-            <defs>
-              <linearGradient id="hfGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#fff" stopOpacity={0.06} />
-                <stop offset="95%" stopColor="#fff" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <XAxis dataKey="day" tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
-            <YAxis domain={[1.5, 2.5]} tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
-            <Tooltip
-              contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,.07)", borderRadius: 0, fontFamily: "DM Mono", fontSize: 12 }}
-              labelStyle={{ color: "#555" }} itemStyle={{ color: "#fff" }} />
-            <Area type="monotone" dataKey="hf" name="Health Factor"
-              stroke="rgba(255,255,255,0.7)" strokeWidth={1.5} fill="url(#hfGrad)" />
-          </AreaChart>
-        </ResponsiveContainer>
-        </ChartWrapper>
+        healthChartData.length === 0
+          ? <p className="font-mono text-sm text-[#777] py-8 text-center">No active loans.</p>
+          : <ChartWrapper height={200}>
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={healthChartData}>
+                <defs>
+                  <linearGradient id="hfGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#fff" stopOpacity={0.06} />
+                    <stop offset="95%" stopColor="#fff" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="day" tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
+                <Tooltip
+                  contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,.07)", borderRadius: 0, fontFamily: "DM Mono", fontSize: 12 }}
+                  labelStyle={{ color: "#555" }} itemStyle={{ color: "#fff" }} />
+                <Area type="monotone" dataKey="hf" name="Health Factor"
+                  stroke="rgba(255,255,255,0.7)" strokeWidth={1.5} fill="url(#hfGrad)" />
+              </AreaChart>
+            </ResponsiveContainer>
+            </ChartWrapper>
       )}
 
       <div className="flex flex-wrap gap-3 mt-3 font-mono text-xs text-[#777]">
-        <span>CPU: 88.2%</span>
-        <span>ENTROPY: 0.99923</span>
-        <span>ZK Latency: 142ms</span>
         <span className="ml-auto">LAST SYNC: <span className="text-white">just now</span></span>
       </div>
     </div>
@@ -404,7 +417,7 @@ export default function BorrowPage() {
   useWalletGuard();
 
   const { data: score, isError: scoreError } = useCreditScore();
-  const scoringDown = scoreError || (score && score.hash === "8f3d...912a");
+  const scoringDown = scoreError || (score && score.hash === "----...----");
 
   const loans = useAppSelector((s) => s.finance.loans);
   const activeLoanVolume = loans.reduce((a, l) => a + (l.status === "active" ? l.borrowedAmount : 0), 0);

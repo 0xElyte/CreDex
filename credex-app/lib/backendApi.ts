@@ -109,6 +109,20 @@ export interface GoLoanRecord {
   encrypted_handle?: string;
   zk_proof_hash?:    string;
   on_chain_confirmed: boolean;
+  solidity_loan_id?: number;
+}
+
+export interface GoLoanConfirmRequest {
+  wallet_address: string;
+  loan_id: string;
+  amount_usdc: number;
+  collateral_pct: number;
+  interest_apr: number;
+  tier: string;
+  tx_hash: string;
+  proof_id?: string;
+  proof_data?: string;
+  solidity_loan_id?: number;
 }
 
 export interface GoLoanRequestResponse {
@@ -127,6 +141,7 @@ export interface GoLoanRequestResponse {
   proof_data?:       string;
   relay_tx_hash?:    string;
   proof_expiry?:     string;
+  solidity_loan_id?: number;
 }
 
 export interface GoLoanStatusResponse {
@@ -217,6 +232,9 @@ export const backendApi = {
       amount_usdc:    amountUsdc,
       chain_id:       chainId,
     }),
+
+  confirmLoan: (payload: GoLoanConfirmRequest) =>
+    post<GoLoanRequestResponse>("/api/v1/loan/confirm", payload),
 
   getLoanStatus: (wallet: string) =>
     get<GoLoanStatusResponse>(`/api/v1/loan/status/${wallet}`),

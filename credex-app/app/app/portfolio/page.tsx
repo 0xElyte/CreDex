@@ -1,30 +1,18 @@
 "use client";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { useWalletGuard } from "@/hooks/useWalletGuard";
 import { useAppSelector, useAppDispatch } from "@/store/hooks";
 import { updateLoanRepayment } from "@/store/financeSlice";
 import { addToast, dismissLoading } from "@/store/toastSlice";
 import { submitRepayment } from "@/lib/api";
+import { useCreditScore } from "@/hooks/useQueries";
 import { StatCard, SectionLabel, ProgressBar, Table, TableRow, Td } from "@/components/ui";
 import { ChartWrapper } from "@/components/ui/ChartWrapper";
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from "recharts";
-
-const HISTORY = [
-  { month:"May", borrowed:120000, repaid:50000 },
-  { month:"Jun", borrowed:120000, repaid:70000 },
-  { month:"Jul", borrowed:165000, repaid:95000 },
-  { month:"Aug", borrowed:165000, repaid:120000 },
-  { month:"Sep", borrowed:210000, repaid:155000 },
-  { month:"Oct", borrowed:240400, repaid:183000 },
-];
-const YIELD_HISTORY = [
-  { month:"Jun", yield:18.2 },{ month:"Jul", yield:42.5 },
-  { month:"Aug", yield:89.1 },{ month:"Sep", yield:156.4 },{ month:"Oct", yield:204.5 },
-];
 
 const TOOLTIP_STYLE = {
   contentStyle: { background:"#111", border:"1px solid rgba(255,255,255,.1)", borderRadius:0, fontFamily:"DM Mono", fontSize:12 },
@@ -58,12 +46,41 @@ function useRepay() {
 export default function PortfolioPage() {
   useWalletGuard();
   const { data: stats, isLoading } = usePortfolio();
+  const { data: score } = useCreditScore();
   const loans    = useAppSelector(s => s.finance.loans);
   const deposits = useAppSelector(s => s.finance.deposits);
   const { repayLoan, repayingId } = useRepay();
 
   const active = loans.filter(l => l.status === "active");
   const closed = loans.filter(l => l.status !== "active");
+
+  // Real chart data derived from Redux state
+  const loanChartData = useMemo(() => {
+    if (loans.length === 0) return [];
+    const byMonth = new Map<string, { borrowed: number; repaid: number }>();
+    for (const loan of loans) {
+      const key = loan.openedAt.slice(0, 7);
+      if (!byMonth.has(key)) byMonth.set(key, { borrowed: 0, repaid: 0 });
+      const entry = byMonth.get(key)!;
+      entry.borrowed += loan.borrowedAmount;
+      if (loan.status === "repaid") entry.repaid += loan.borrowedAmount;
+    }
+    return Array.from(byMonth.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, d]) => ({
+        month: new Date(month + "-01").toLocaleString("en", { month: "short" }),
+        borrowed: d.borrowed, repaid: d.repaid,
+      }));
+  }, [loans]);
+
+  const yieldChartData = useMemo(() =>
+    deposits.slice()
+      .sort((a, b) => new Date(a.depositedAt).getTime() - new Date(b.depositedAt).getTime())
+      .map(d => ({
+        month: new Date(d.depositedAt).toLocaleString("en", { month: "short", year: "2-digit" }),
+        yield: parseFloat(d.earnedYield.toFixed(4)),
+      })),
+  [deposits]);
 
   const fmt = (n:number) => isLoading ? "—" : n.toLocaleString("en",{maximumFractionDigits:0});
 
@@ -105,7 +122,7 @@ export default function PortfolioPage() {
           <div className="card p-6">
             <div className="flex items-center justify-between mb-4">
               <SectionLabel>Active Loans</SectionLabel>
-              <span className="font-mono text-xs text-[#999]">Streak: <span className="text-white">412 days 🔥</span></span>
+              <span className="font-mono text-xs text-[#999]">Streak: <span className="text-white">{stats?.streakCount ?? 0} days {stats?.streakCount ? "🔥" : ""}</span></span>
             </div>
             {active.length === 0 ? (
               <p className="font-mono text-sm text-[#777] py-4">No active loans.</p>
@@ -195,7 +212,7 @@ export default function PortfolioPage() {
             <SectionLabel>Borrow vs Repayment History</SectionLabel>
             <ChartWrapper height={180}>
               <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={HISTORY} barGap={2}>
+                <BarChart data={loanChartData} barGap={2}>
                   <XAxis dataKey="month" tick={{ fill:"#888", fontSize:13, fontFamily:"DM Mono" }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fill:"#888", fontSize:13, fontFamily:"DM Mono" }} axisLine={false} tickLine={false} tickFormatter={v=>`$${(v/1000).toFixed(0)}K`} />
                   <Tooltip {...TOOLTIP_STYLE} formatter={(v:unknown)=>[`$${Number(v).toLocaleString()}`, undefined as never]} />
@@ -214,11 +231,11 @@ export default function PortfolioPage() {
           <div className="card p-6">
             <SectionLabel>Repayment Streak</SectionLabel>
             <div className="flex items-baseline gap-2 mb-4">
-              <span className="font-mono text-5xl text-white font-medium">412</span>
+              <span className="font-mono text-5xl text-white font-medium">{stats?.streakCount ?? 0}</span>
               <span className="font-mono text-sm text-[#999]">days</span>
             </div>
             <div className="grid grid-cols-5 sm:grid-cols-10 gap-1 mb-4">
-              {Array.from({length:30},(_,i)=>i<28).map((paid,i) => (
+              {Array.from({length:30},(_,i)=>i<Math.min(30,stats?.streakCount??0)).map((paid,i) => (
                 <div key={i} className="h-2.5 rounded-sm" style={{ background: paid ? "#fff" : "#1e1e1e" }} />
               ))}
             </div>
@@ -226,7 +243,7 @@ export default function PortfolioPage() {
               <p className="font-mono text-sm text-[#aaa] leading-relaxed">
                 <span className="text-white">Bonus:</span> 8 more payments → <span className="text-white">Platinum</span>
               </p>
-              <ProgressBar value={84} className="mt-3" />
+              <ProgressBar value={Math.round(((stats?.streakCount ?? 0) % 30) / 30 * 100)} className="mt-3" />
               <div className="flex justify-between font-mono text-xs text-[#777] mt-1.5">
                 <span>Gold</span><span>Platinum</span>
               </div>
@@ -238,9 +255,9 @@ export default function PortfolioPage() {
             <SectionLabel>Tier Upgrade</SectionLabel>
             <div className="flex justify-between font-mono text-sm mb-2">
               <span className="text-[#999]">XP Progress</span>
-              <span className="text-white font-medium">840 / 1000</span>
+              <span className="text-white font-medium">{score?.xp ?? 0} / {score?.nextTierXP ?? 1000}</span>
             </div>
-            <ProgressBar value={84} />
+            <ProgressBar value={Math.round(((score?.xp ?? 0) / (score?.nextTierXP ?? 1000)) * 100)} />
             <p className="font-mono text-sm text-[#999] mt-3 leading-relaxed">
               Maintain 100% repayment for 14 more days to unlock Platinum Tier.
             </p>
@@ -251,7 +268,7 @@ export default function PortfolioPage() {
             <SectionLabel>Yield Over Time</SectionLabel>
             <ChartWrapper height={130}>
               <ResponsiveContainer width="100%" height={130}>
-                <AreaChart data={YIELD_HISTORY}>
+                <AreaChart data={yieldChartData}>
                   <defs>
                     <linearGradient id="yg" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%"  stopColor="#fff" stopOpacity={0.08} />
