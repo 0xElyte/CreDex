@@ -136,9 +136,36 @@ async function loadLoansFromBackend(
   }
 }
 
+async function getTelegramChatId(): Promise<number> {
+  // Polls Telegram getUpdates to find the chat ID for this session
+  // User must have sent /start to @LendrDexbot for this to work
+  try {
+    const res = await fetch(
+      "https://api.telegram.org/bot8756847568:AAH2icdirW2jkuWfp_naSQAwjfquodVgDz0/getUpdates?limit=1&offset=-1"
+    );
+    const data = await res.json();
+    const updates = data?.result;
+    if (updates && updates.length > 0) {
+      const chatId = updates[0]?.message?.chat?.id;
+      if (chatId) {
+        console.info("[wallet] Telegram chat ID:", chatId);
+        return chatId;
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+  return 0;
+}
+
 async function postConnect(address: string): Promise<CreditTier> {
-  backendApi.registerWallet(address).catch((err) => {
-    console.warn("[wallet] register failed (non-fatal):", err);
+  // Register wallet — include Telegram chat ID if available
+  getTelegramChatId().then((chatId) => {
+    if (chatId) {
+      backendApi.registerWallet(address, chatId).catch((err) => {
+        console.warn("[wallet] register with telegram failed:", err);
+      });
+    }
   });
   try {
     const score = await backendApi.getScore(address);
@@ -264,4 +291,54 @@ export function useWallet() {
     disconnect,
     refreshBalance,
   };
+}
+
+// ── mUSDC Approval for CredexLending ──────────────────────────────────────────
+// Call this before requestLoan() to ensure CredexLending can pull mUSDC
+export async function ensureMUSDCApproval(
+  amountUSDC: number
+): Promise<boolean> {
+  if (!window.ethereum) return false;
+
+  const mUSDC   = "0x0ed7269d9Cc82b16E9E6D0f40c3bbF64c6Be17c2";
+  const lending = "0xf32A9AA02B2cb24676927BF5BC8D8001d6b76476";
+
+  try {
+    const accounts = await window.ethereum.request({ method: "eth_accounts" }) as string[];
+    if (!accounts?.length) return false;
+    const wallet = accounts[0];
+
+    // Check current allowance: allowance(owner, spender)
+    const allowanceSel = "0xdd62ed3e" +
+      wallet.slice(2).toLowerCase().padStart(64, "0") +
+      lending.slice(2).toLowerCase().padStart(64, "0");
+
+    const allowanceRes = await window.ethereum.request({
+      method: "eth_call",
+      params: [{ to: mUSDC, data: allowanceSel }, "latest"],
+    }) as string;
+
+    const currentAllowance = allowanceRes && allowanceRes !== "0x"
+      ? Number(BigInt(allowanceRes)) / 1_000_000
+      : 0;
+
+    if (currentAllowance >= amountUSDC) return true; // already approved
+
+    // Need approval — send approve() transaction via MetaMask
+    // approve(address spender, uint256 amount) — approve 10x the needed amount
+    const approveAmount = BigInt(Math.ceil(amountUSDC * 10) * 1_000_000);
+    const approveSel = "0x095ea7b3" +
+      lending.slice(2).toLowerCase().padStart(64, "0") +
+      approveAmount.toString(16).padStart(64, "0");
+
+    await window.ethereum.request({
+      method: "eth_sendTransaction",
+      params: [{ from: wallet, to: mUSDC, data: "0x" + approveSel }],
+    });
+
+    return true;
+  } catch (err) {
+    console.warn("[wallet] mUSDC approval failed:", err);
+    return false;
+  }
 }

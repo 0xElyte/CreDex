@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useAppSelector, useAppDispatch } from "@/store/hooks";
 import { useZKProof } from "@/hooks/useZKProof";
+import { ensureMUSDCApproval } from "@/hooks/useWallet";
 import { useCollateralOptions, useCreditScore } from "@/hooks/useQueries";
 import { useWalletGuard } from "@/hooks/useWalletGuard";
 import { useToast } from "@/hooks/useToast";
@@ -18,6 +19,40 @@ import {
 import { ChartWrapper } from "@/components/ui/ChartWrapper";
 import type { BorrowRequestPayload } from "@/types";
 import { clsx } from "clsx";
+
+// ─── Etherscan link helper ────────────────────────────────────────────────────
+function EtherscanLink({ hash, label }: { hash: string; label?: string }) {
+  if (!hash || hash.length < 10) return null;
+  return (
+    <a
+      href={`https://sepolia.etherscan.io/tx/${hash}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-mono text-xs text-[#aaa] hover:text-white transition-colors underline underline-offset-2 decoration-white/20 hover:decoration-white/60 truncate max-w-[120px] block"
+      title={hash}
+    >
+      {label ?? `${hash.slice(0, 10)}...${hash.slice(-4)}`}
+    </a>
+  );
+}
+
+// ─── Countdown helper ──────────────────────────────────────────────────────────
+function useCountdown(dueDate: string) {
+  const [timeLeft, setTimeLeft] = useState("");
+  useEffect(() => {
+    const calc = () => {
+      const diff = new Date(dueDate).getTime() - Date.now();
+      if (diff <= 0) { setTimeLeft("Overdue"); return; }
+      const d = Math.floor(diff / 86400000);
+      const h = Math.floor((diff % 86400000) / 3600000);
+      setTimeLeft(d > 0 ? `${d}d ${h}h` : `${h}h`);
+    };
+    calc();
+    const iv = setInterval(calc, 60_000);
+    return () => clearInterval(iv);
+  }, [dueDate]);
+  return timeLeft;
+}
 
 // ─── Repayment chart data ──────────────────────────────────────────────────────
 const REPAY_DATA = [
@@ -225,7 +260,7 @@ function LoanTable() {
                 </div>
               </Td>
               <Td dim>
-                {new Date(loan.dueDate).toLocaleDateString("en", { month: "short", day: "numeric" })}
+                <LoanCountdown dueDate={loan.dueDate} />
               </Td>
               <Td>
                 <div className="flex items-center gap-2">
@@ -268,15 +303,29 @@ function LoanTable() {
                 </Td>
                 <Td dim>{new Date(loan.openedAt).toLocaleDateString()}</Td>
                 <Td dim>
-                  <span className="font-mono text-xs text-[#aaa] truncate max-w-[120px] block" title={loan.txHash}>
-                    {loan.txHash.slice(0, 14)}...
-                  </span>
+                  <EtherscanLink hash={loan.txHash} />
                 </Td>
               </TableRow>
             ))}
           </Table>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Loan Countdown ───────────────────────────────────────────────────────────
+function LoanCountdown({ dueDate }: { dueDate: string }) {
+  const timeLeft = useCountdown(dueDate);
+  const isOverdue = timeLeft === "Overdue";
+  return (
+    <div>
+      <span className={clsx("font-mono text-xs", isOverdue ? "text-[#888]" : "text-white")}>
+        {timeLeft}
+      </span>
+      <span className="font-mono text-xs text-[#666] block">
+        {new Date(dueDate).toLocaleDateString("en", { month: "short", day: "numeric" })}
+      </span>
     </div>
   );
 }
@@ -428,7 +477,12 @@ export default function BorrowPage() {
     return () => ctx.revert();
   }, []);
 
-  const handleBorrow = (payload: BorrowRequestPayload) => {
+  const handleBorrow = async (payload: BorrowRequestPayload) => {
+    // Ensure MetaMask has approved mUSDC for CredexLending before borrowing
+    const approved = await ensureMUSDCApproval(payload.amount);
+    if (!approved) {
+      console.warn("[borrow] mUSDC approval failed or rejected — proceeding anyway");
+    }
     setShowModal(true);
     runProof(payload);
   };

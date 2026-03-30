@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRevealScore } from "@/hooks/usePortfolio";
 import { useAppSelector } from "@/store/hooks";
 import { useCreditScore } from "@/hooks/useQueries";
@@ -52,6 +52,92 @@ function CopyBtn({ text, label = "copy" }: { text: string; label?: string }) {
     >
       {copied ? "✓" : label}
     </button>
+  );
+}
+
+// ─── SBT Card ─────────────────────────────────────────────────────────────────
+// Reads the real CredexSBT token from Sepolia
+const SBT_CONTRACT = "0x0E079fA33Fe1cd139C940312092E2b0245E2ab4d";
+const TIER_COLORS: Record<string, string> = {
+  Platinum: "#e5e5e5", Gold: "#e0c97f", Silver: "#aaa", Bronze: "#b87333", Denied: "#555",
+};
+
+function SBTCard({ wallet, tier }: { wallet: string | null; tier: string }) {
+  const [tokenId, setTokenId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!wallet || typeof window === "undefined" || !window.ethereum) {
+      setLoading(false);
+      return;
+    }
+    const fetchSBT = async () => {
+      try {
+        // balanceOf(address) → check if wallet has an SBT
+        const balSel = "0x70a08231" + wallet.slice(2).toLowerCase().padStart(64, "0");
+        const balRes = await window.ethereum!.request({
+          method: "eth_call",
+          params: [{ to: SBT_CONTRACT, data: balSel }, "latest"],
+        }) as string;
+        const balance = balRes && balRes !== "0x" ? Number(BigInt(balRes)) : 0;
+
+        if (balance > 0) {
+          // tokenOfOwnerByIndex(address, 0) → get first token ID
+          const idxSel = "0x2f745c59" +
+            wallet.slice(2).toLowerCase().padStart(64, "0") +
+            "0".padStart(64, "0");
+          const idxRes = await window.ethereum!.request({
+            method: "eth_call",
+            params: [{ to: SBT_CONTRACT, data: idxSel }, "latest"],
+          }) as string;
+          if (idxRes && idxRes !== "0x") {
+            setTokenId(Number(BigInt(idxRes)).toString());
+          }
+        }
+      } catch { /* no SBT yet */ }
+      setLoading(false);
+    };
+    fetchSBT();
+  }, [wallet]);
+
+  const color = TIER_COLORS[tier] ?? "#aaa";
+  const hasSBT = tokenId !== null;
+
+  return (
+    <div className="mt-5 pt-5 border-t border-white/[0.07] flex items-center gap-4">
+      <div className="w-12 h-12 bg-[#0a0a0a] border border-white/[0.1] flex items-center justify-center text-2xl relative"
+        style={{ boxShadow: hasSBT ? `0 0 12px ${color}40` : "none" }}>
+        {loading ? (
+          <span className="w-4 h-4 border border-white/20 border-t-white rounded-full animate-spin" />
+        ) : hasSBT ? (
+          <span style={{ filter: "none" }}>🏆</span>
+        ) : (
+          <span style={{ filter: "grayscale(1)", opacity: 0.4 }}>🏆</span>
+        )}
+      </div>
+      <div>
+        <p className="font-mono text-sm text-white">Soulbound Credit NFT</p>
+        {loading ? (
+          <p className="font-mono text-xs text-[#777]">Checking on-chain...</p>
+        ) : hasSBT ? (
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="font-mono text-xs" style={{ color }}>
+              {tier} · Token #{tokenId}
+            </p>
+            <a
+              href={`https://sepolia.etherscan.io/token/${SBT_CONTRACT}?a=${wallet}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-xs text-[#777] hover:text-white transition-colors underline"
+            >
+              View ↗
+            </a>
+          </div>
+        ) : (
+          <p className="font-mono text-xs text-[#777]">Non-Transferable · Minted on first loan</p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -204,13 +290,7 @@ export default function ScoreHistoryPage() {
             </div>
           )}
 
-          <div className="mt-5 pt-5 border-t border-white/[0.07] flex items-center gap-4">
-            <div className="w-12 h-12 bg-[#0a0a0a] border border-white/[0.1] flex items-center justify-center text-2xl" style={{ filter:"grayscale(1)" }}>🏆</div>
-            <div>
-              <p className="font-mono text-sm text-white">Soulbound Credit NFT</p>
-              <p className="font-mono text-xs text-[#777]">Non-Transferable · {currentTier}</p>
-            </div>
-          </div>
+          <SBTCard wallet={walletAddress} tier={currentTier} />
         </div>
       </div>
 
@@ -296,6 +376,33 @@ export default function ScoreHistoryPage() {
             )}
             {currentTier === "Platinum" && (
               <p className="font-mono text-sm text-[#999] mt-1">Maximum tier reached</p>
+            )}
+          </div>
+
+          {/* Score improvement tips */}
+          <div className="mt-4 pt-4 border-t border-white/[0.07] space-y-2">
+            <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-3">How to improve</p>
+            {score?.signals.map((s) => s.value < 50 && s.label !== "Liquidation Penalty" ? (
+              <div key={s.label} className="flex items-start gap-2">
+                <span className="text-[#555] mt-0.5">→</span>
+                <p className="font-mono text-xs text-[#888] leading-relaxed">
+                  {s.label === "Wallet Age" && "Hold wallet longer — age score grows over time"}
+                  {s.label === "DeFi Diversity" && "Interact with more protocols (Aave, Uniswap, Compound)"}
+                  {s.label === "Repayment History" && "Repay DeFi loans on time to earn repayment score"}
+                  {s.label === "Volume Consistency" && "Maintain consistent monthly on-chain activity"}
+                  {s.label === "World ID Bonus" && "Verify your identity with World ID for +100 pts"}
+                </p>
+              </div>
+            ) : null)}
+            {currentTier !== "Platinum" && nextTier && (
+              <div className="mt-3 bg-white/[0.03] border border-white/[0.07] px-3 py-2">
+                <p className="font-mono text-xs text-white">
+                  ~{ptsToNext} pts needed → {nextTier.name} tier
+                </p>
+                <p className="font-mono text-xs text-[#777] mt-0.5">
+                  Unlocks ${nextTier.name === "Silver" ? "2,000" : nextTier.name === "Gold" ? "5,000" : "10,000"} max loan
+                </p>
+              </div>
             )}
           </div>
         </div>

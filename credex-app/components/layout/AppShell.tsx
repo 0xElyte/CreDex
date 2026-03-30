@@ -210,6 +210,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <WalletButton />
         </header>
 
+        {/* Testnet banner */}
+        <div className="bg-white/[0.03] border-b border-white/[0.06] px-4 py-1.5 flex items-center justify-center gap-3">
+          <span className="w-1.5 h-1.5 rounded-full bg-white pulse-dot shrink-0" />
+          <p className="font-mono text-xs text-[#888] tracking-wide">
+            Live on <span className="text-white">Ethereum Sepolia Testnet</span> — all transactions are real
+          </p>
+          <a
+            href="https://sepolia.etherscan.io/address/0xf32A9AA02B2cb24676927BF5BC8D8001d6b76476"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-xs text-[#666] hover:text-white transition-colors"
+          >
+            Contract ↗
+          </a>
+        </div>
+
         <main ref={mainRef} className="flex-1 p-4 lg:p-8 max-w-[1440px] w-full mx-auto">
           {children}
         </main>

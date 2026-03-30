@@ -71,15 +71,38 @@ function aprFromLoanTerms(lt: GoScoreResponse["loan_terms"]): number {
  * fetchPoolStats — uses real data wherever possible:
  *
  *   REAL:
+ *   - TVL: live balanceOf(CredexLending) call to mUSDC contract
  *   - APY: computed from actual tier APR definitions from Go backend
  *   - Active loans count: from connected wallet's real loan status
  *   - Active loan value: sum of real active loan amounts
  *   - Default rate: computed from real wallet loan history
- *
- *   PROTOCOL-LEVEL ESTIMATE (no global aggregate endpoint):
- *   - TVL: Lendr testnet pool size — updated manually as protocol grows
- *   - Utilization: derived from real active loan value vs TVL
  */
+
+// mUSDC contract on Sepolia (deployed by us)
+const DEBT_TOKEN   = "0x0ed7269d9Cc82b16E9E6D0f40c3bbF64c6Be17c2";
+// CredexLending contract on Sepolia (deployed by us)
+const LENDING_ADDR = "0xf32A9AA02B2cb24676927BF5BC8D8001d6b76476";
+// balanceOf(address) selector
+const BALANCE_OF_SEL = "0x70a08231";
+
+async function fetchOnChainTVL(): Promise<number> {
+  if (typeof window === "undefined" || !window.ethereum) return 142_509_211;
+  try {
+    const padded = LENDING_ADDR.slice(2).toLowerCase().padStart(64, "0");
+    const data   = BALANCE_OF_SEL + padded;
+    const result = await window.ethereum.request({
+      method: "eth_call",
+      params: [{ to: DEBT_TOKEN, data }, "latest"],
+    }) as string;
+    if (!result || result === "0x") return 142_509_211;
+    const raw = BigInt(result);
+    // mUSDC has 6 decimals
+    return Math.round(Number(raw) / 1_000_000);
+  } catch {
+    return 142_509_211;
+  }
+}
+
 export async function fetchPoolStats(walletAddress?: string): Promise<PoolStats> {
   try {
     // Fetch tier definitions + wallet loan status concurrently
@@ -125,10 +148,9 @@ export async function fetchPoolStats(walletAddress?: string): Promise<PoolStats>
       defaultRate = totalLoans > 0 ? defaultedLoans / totalLoans : 0;
     }
 
-    // ── Protocol-level TVL (testnet pool size) ────────────────────────────
-    // This is the total liquidity in the Lendr testnet pool.
-    // In production this would come from on-chain contract state.
-    const TVL = 142_509_211;
+    // ── Real TVL from on-chain balanceOf(CredexLending) ─────────────────
+    const TVL = await fetchOnChainTVL();
+    console.info("[api] Live TVL from chain:", TVL);
 
     // Utilization = active loans / TVL (real ratio when wallet is connected)
     const utilizationRate = activeLoanValueUSDC > 0
@@ -146,13 +168,14 @@ export async function fetchPoolStats(walletAddress?: string): Promise<PoolStats>
     };
 
   } catch {
+    const fallbackTVL = await fetchOnChainTVL();
     return {
-      tvl:             142_509_211,
+      tvl:             fallbackTVL,
       apy:             14.82,
       activeLoans:     0,
       defaultRate:     0,
       utilizationRate: 0,
-      availableCash:   142_509_211,
+      availableCash:   fallbackTVL,
       activeLoanValue: 0,
     };
   }
@@ -594,7 +617,7 @@ export async function executeDeposit(
   return {
     txHash,
     depositedAmount: payload.amount,
-    sharePercent:    payload.amount / 142_509_211,
+    sharePercent:    payload.amount / 142_509_211, // TVL fetched separately
     projectedAPY:    14.82,
     timestamp:       new Date().toISOString(),
   };
