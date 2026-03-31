@@ -56,6 +56,10 @@ export const financeSlice = createSlice({
     clearLoans(state) {
       state.loans = [];
     },
+    // Load real deposits from Go backend (replaces the entire deposits array)
+    setDeposits(state, action: PayloadAction<DepositPosition[]>) {
+      state.deposits = action.payload;
+    },
     // Deposit flow
     startDeposit(state, action: PayloadAction<number>) {
       state.pendingDepositAmount = action.payload;
@@ -93,6 +97,7 @@ export const financeSlice = createSlice({
 export const {
   addLoan,
   setLoans,
+  setDeposits,
   updateLoanRepayment,
   updateLoanHealth,
   setPendingRepayment,

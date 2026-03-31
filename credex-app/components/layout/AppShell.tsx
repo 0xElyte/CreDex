@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { WalletButton } from "@/components/wallet/WalletButton";
 import { ToastContainer } from "@/components/ui/Toast";
 import { useAppSelector } from "@/store/hooks";
+import { useWallet } from "@/hooks/useWallet";
 import { clsx } from "clsx";
 import { backendApi } from "@/lib/backendApi";
 
@@ -21,6 +22,7 @@ const LEND_NAV = [
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const wallet   = useAppSelector((s) => s.wallet);
+  const { chainName } = useWallet();
   const loans    = useAppSelector((s) => s.finance.loans);
   const activeLoanCount = loans.filter((l) => l.status === "active").length;
 
@@ -170,7 +172,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <div className="px-5 py-2.5 border-t border-white/[0.04]">
-          <p className="font-mono text-xs text-[#999]">STARKNET_SEPOLIA</p>
+          <p className="font-mono text-xs text-[#999]">
+            {chainName ?? (wallet.status === "connected" ? "UNKNOWN_CHAIN" : "NOT_CONNECTED")}
+          </p>
         </div>
       </aside>
 

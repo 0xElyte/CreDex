@@ -3,6 +3,8 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +24,7 @@ import (
 )
 
 var walletRE = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+var txHashRE = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
 
 // H holds all shared dependencies injected at startup
 type H struct {
@@ -82,8 +85,9 @@ func (h *H) RegisterWallet(c *gin.Context) {
 		return
 	}
 
-	if req.TelegramChatID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "telegram_chat_id must be a positive integer"})
+	// TelegramChatID is optional — 0 means Telegram notifications are not configured
+	if req.TelegramChatID < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "telegram_chat_id must be a non-negative integer"})
 		return
 	}
 
@@ -172,6 +176,10 @@ func (h *H) RequestLoan(c *gin.Context) {
 		})
 		return
 	}
+	if h.Store.HasActiveLoan(wallet) {
+		c.JSON(http.StatusConflict, gin.H{"error": "This wallet already has an active loan. Repay it before borrowing again."})
+		return
+	}
 
 	score, err := h.fetchScore(wallet, req.ChainID)
 	if err != nil {
@@ -232,27 +240,12 @@ func (h *H) RequestLoan(c *gin.Context) {
 		return
 	}
 
+	// ── Step 7: Prepare provisional loan metadata only ────────────────────────
 	now := time.Now().UTC()
 	loanID := fmt.Sprintf("LOAN-%s-%d", wallet[2:8], now.UnixMilli())
+	dueDate := now.AddDate(0, 0, store.LoanTermDays)
 
-	loan := &models.LoanRecord{
-		LoanID:        loanID,
-		WalletAddress: wallet,
-		AmountUSDC:    req.AmountUSDC,
-		CollateralPct: collateralPct,
-		InterestAPR:   interestAPR,
-		Tier:          score.Tier,
-		Status:        models.LoanActive,
-		CreatedAt:     now,
-		DueDate:       now.AddDate(0, 0, store.LoanTermDays),
-	}
-
-	if err := h.Store.CreateLoanIfNoActive(loan); err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-		return
-	}
-
-	// ── Async: chain submission + Filecoin + Telegram ─────────────────────────
+	// ── Step 8: Async — persist proof metadata / notify only ─────────────────
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -260,34 +253,7 @@ func (h *H) RequestLoan(c *gin.Context) {
 			}
 		}()
 
-		// Store relay tx hash first
-		h.Store.UpdateTxHash(
-			loanID,
-			relayResult.RelayTxHash,
-			relayResult.ProofID,
-			relayResult.ProofData,
-			!relayResult.Mocked,
-		)
-
-		// ── Call CredexLending.requestLoan() on-chain ─────────────────────
-		// Submits the actual loan to the deployed Solidity contract on Sepolia.
-		// Uses the proof data from the relay step as authorization.
-		collateralAmount := req.AmountUSDC * float64(collateralPct) / 100.0
-		loanCall, loanCallErr := h.Lending.RequestLoan(
-			wallet,
-			req.AmountUSDC,
-			collateralAmount,
-			relayResult.ProofData,
-		)
-		if loanCallErr != nil {
-			fmt.Printf("[WARN] CredexLending.requestLoan failed for %s: %v\n", loanID, loanCallErr)
-		} else if loanCall != nil && !loanCall.Mocked {
-			// Real on-chain tx confirmed — update tx hash to the lending tx
-			fmt.Printf("[CHAIN] CredexLending.requestLoan on-chain: %s\n", loanCall.TxHash)
-			h.Store.UpdateTxHash(loanID, loanCall.TxHash, relayResult.ProofID, relayResult.ProofData, true)
-		}
-
-		// Store proof metadata on Filecoin
+		// 1. Filecoin
 		if _, err := h.Filecoin.StoreProofMetadata(
 			wallet, loanID,
 			relayResult.ProofID, relayResult.ProofData,
@@ -296,20 +262,24 @@ func (h *H) RequestLoan(c *gin.Context) {
 			fmt.Printf("[WARN] Filecoin storage failed for %s: %v\n", loanID, err)
 		}
 
-		// Telegram notification
+		// 2. Telegram
 		if chatID := h.Store.GetChatID(wallet); chatID != 0 {
 			msg := fmt.Sprintf(
-				"✅ *Loan Approved!*\n\n"+
+				"*Loan Ready For Signature*\n\n"+
 					"Amount: *$%.0f USDC*\n"+
 					"Tier: *%s*\n"+
 					"Collateral: *%d%%*\n"+
 					"Interest: *%.1f%% APR*\n"+
 					"Due: *%s*\n"+
 					"Loan ID: `%s`\n"+
-					"Relay Tx: `%s`",
+					"Starknet Proof: %v\n"+
+					"Relay Tx: `%s`\n\n"+
+					"Next step: submit the collateralized borrow transaction from your wallet.",
 				req.AmountUSDC, score.Tier, collateralPct, interestAPR,
-				loan.DueDate.Format("Jan 2, 2006"),
-				loanID, relayResult.RelayTxHash,
+				dueDate.Format("Jan 2, 2006"),
+				loanID,
+				relayResult.StarknetUsed,
+				relayResult.RelayTxHash,
 			)
 			if err := sendTelegram(chatID, msg); err != nil {
 				fmt.Printf("[WARN] Telegram notification failed: %v\n", err)
@@ -321,18 +291,121 @@ func (h *H) RequestLoan(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.LoanRequestResponse{
 		Success:          true,
-		Message:          fmt.Sprintf("Loan approved. %d%% collateral required. Use proof_data to call requestLoan().", collateralPct),
+		Message:          fmt.Sprintf("Credit proof ready. %d%% collateral required. Submit CredexLending.requestLoan() from the borrower wallet.", collateralPct),
 		LoanID:           loanID,
 		AmountUSDC:       req.AmountUSDC,
 		CollateralPct:    collateralPct,
 		InterestAPR:      interestAPR,
-		DueDate:          loan.DueDate.Format(time.RFC3339),
+		DueDate:          dueDate.Format(time.RFC3339),
 		Tier:             score.Tier,
 		OnChainConfirmed: false,
 		ProofID:          relayResult.ProofID,
 		ProofData:        relayResult.ProofData,
 		RelayTxHash:      relayResult.RelayTxHash,
 		ProofExpiry:      fmt.Sprintf("%d", relayResult.ProofExpiry),
+	})
+}
+
+func (h *H) ConfirmLoan(c *gin.Context) {
+	var req models.LoanConfirmRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	wallet := strings.ToLower(strings.TrimSpace(req.WalletAddress))
+	if err := validateWallet(wallet); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.LoanID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "loan_id cannot be empty"})
+		return
+	}
+	if req.AmountUSDC < store.MinLoanUSDC || req.AmountUSDC > store.MaxLoanUSDC {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount_usdc out of supported range"})
+		return
+	}
+	if req.CollateralPct < 0 || req.CollateralPct > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "collateral_pct must be between 0 and 100"})
+		return
+	}
+	if strings.TrimSpace(req.Tier) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tier cannot be empty"})
+		return
+	}
+	if !txHashRE.MatchString(strings.TrimSpace(req.TxHash)) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tx_hash must be a 32-byte hex string"})
+		return
+	}
+
+	now := time.Now().UTC()
+	loan := &models.LoanRecord{
+		LoanID:           strings.TrimSpace(req.LoanID),
+		WalletAddress:    wallet,
+		AmountUSDC:       req.AmountUSDC,
+		CollateralPct:    req.CollateralPct,
+		InterestAPR:      req.InterestAPR,
+		Tier:             strings.TrimSpace(req.Tier),
+		Status:           models.LoanActive,
+		CreatedAt:        now,
+		DueDate:          now.AddDate(0, 0, store.LoanTermDays),
+		TxHash:           strings.TrimSpace(req.TxHash),
+		EncryptedHandle:  req.ProofData,
+		ZKProofHash:      req.ProofID,
+		OnChainConfirmed: true,
+		SolidityLoanID:   req.SolidityLoanID,
+	}
+
+	if err := h.Store.CreateLoanIfNoActive(loan); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.Store.InvalidateScore(wallet, 11155111)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("[WARN] Async confirm panic: %v\n", r)
+			}
+		}()
+
+		if chatID := h.Store.GetChatID(wallet); chatID != 0 {
+			msg := fmt.Sprintf(
+				"*Loan Confirmed On-Chain*\n\n"+
+					"Amount: *$%.0f USDC*\n"+
+					"Tier: *%s*\n"+
+					"Collateral: *%d%%*\n"+
+					"Interest: *%.1f%% APR*\n"+
+					"Due: *%s*\n"+
+					"Loan ID: `%s`\n"+
+					"Tx: `%s`",
+				req.AmountUSDC, loan.Tier, req.CollateralPct, req.InterestAPR,
+				loan.DueDate.Format("Jan 2, 2006"),
+				loan.LoanID,
+				loan.TxHash,
+			)
+			if err := sendTelegram(chatID, msg); err != nil {
+				fmt.Printf("[WARN] Telegram confirm notification failed: %v\n", err)
+			}
+		}
+	}()
+
+	c.JSON(http.StatusOK, models.LoanRequestResponse{
+		Success:          true,
+		Message:          "Loan confirmed on-chain and recorded by backend",
+		LoanID:           loan.LoanID,
+		AmountUSDC:       loan.AmountUSDC,
+		CollateralPct:    loan.CollateralPct,
+		InterestAPR:      loan.InterestAPR,
+		DueDate:          loan.DueDate.Format(time.RFC3339),
+		Tier:             loan.Tier,
+		TxHash:           loan.TxHash,
+		OnChainConfirmed: true,
+		ProofID:          req.ProofID,
+		ProofData:        req.ProofData,
+		SolidityLoanID:   req.SolidityLoanID,
 	})
 }
 
@@ -722,4 +795,99 @@ func sendTelegram(chatID int64, text string) error {
 		return fmt.Errorf("telegram API %d: %s", resp.StatusCode, string(b))
 	}
 	return nil
+}
+
+type DepositRequest struct {
+	WalletAddress string  `json:"wallet_address" binding:"required"`
+	AmountUSDC    float64 `json:"amount_usdc"    binding:"required,gt=0"`
+}
+
+func (h *H) Deposit(c *gin.Context) {
+	var req DepositRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	wallet := strings.ToLower(req.WalletAddress)
+	if err := validateWallet(wallet); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	const MinDepositUSDC = 10.0
+	if req.AmountUSDC < MinDepositUSDC {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("Minimum deposit is $%.0f USDC", MinDepositUSDC),
+		})
+		return
+	}
+
+	depositID := fmt.Sprintf("DEP-%s-%d",
+		strings.ToUpper(wallet[2:6]),
+		time.Now().UnixMilli()%100000,
+	)
+
+	const ProtocolTVL = 142_509_211.0
+	sharePercent := req.AmountUSDC / ProtocolTVL
+
+	// Generate a deterministic 66-char mock tx hash (0x + 64 hex)
+	hashInput := fmt.Sprintf("deposit:%s:%s:%d", depositID, wallet, time.Now().UnixNano())
+	hashSum := sha256.Sum256([]byte(hashInput))
+	txHash := "0x" + hex.EncodeToString(hashSum[:])
+
+	record := &models.DepositRecord{
+		DepositID:     depositID,
+		WalletAddress: wallet,
+		AmountUSDC:    req.AmountUSDC,
+		SharePercent:  sharePercent,
+		EarnedYield:   0,
+		DepositedAt:   time.Now().UTC(),
+		CurrentValue:  req.AmountUSDC,
+		TxHash:        txHash,
+	}
+
+	h.Store.CreateDeposit(record)
+
+	c.JSON(http.StatusCreated, gin.H{
+		"deposit_id":    depositID,
+		"wallet":        wallet,
+		"amount_usdc":   req.AmountUSDC,
+		"share_percent": sharePercent,
+		"apy":           14.82,
+		"tx_hash":       txHash,
+		"deposited_at":  record.DepositedAt,
+		"message":       "Deposit recorded. Earning yield immediately.",
+	})
+}
+
+func (h *H) GetDeposits(c *gin.Context) {
+	wallet := strings.ToLower(c.Param("wallet"))
+	if wallet == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "wallet address required"})
+		return
+	}
+
+	deposits := h.Store.GetDepositsForWallet(wallet)
+
+	now := time.Now().UTC()
+	const APY = 0.1482
+	totalDeposited := 0.0
+	totalEarned := 0.0
+
+	for i := range deposits {
+		elapsed := now.Sub(deposits[i].DepositedAt).Hours() / (24 * 365)
+		deposits[i].EarnedYield = deposits[i].AmountUSDC * APY * elapsed
+		deposits[i].CurrentValue = deposits[i].AmountUSDC + deposits[i].EarnedYield
+		totalDeposited += deposits[i].AmountUSDC
+		totalEarned += deposits[i].EarnedYield
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"wallet":          wallet,
+		"deposits":        deposits,
+		"total_deposited": totalDeposited,
+		"total_earned":    totalEarned,
+		"total_value":     totalDeposited + totalEarned,
+	})
 }

@@ -20,6 +20,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 const (
@@ -104,11 +106,13 @@ func (s *StarknetClient) ValidateCredit(
 
 // ── Starknet JSON-RPC call ────────────────────────────────────────────────────
 
-// callVerifier performs starknet_call targeting the `verify_credit` view
+// callVerifier performs starknet_call targeting the `verify_credit_proof` view
 // on the Cairo CreditVerifier contract.  The Cairo contract is expected to
 // return a tuple of felt252 values:
 //
 //	[proofId, approvedTier, maxBorrowAmount, validUntil, scoreReference]
+//
+// The entry point selector is computed using sn_keccak (Keccak256, 250-bit mask).
 func (s *StarknetClient) callVerifier(
 	borrower string,
 	score    int,
@@ -118,14 +122,22 @@ func (s *StarknetClient) callVerifier(
 	borrowerFelt := padFelt(borrower)
 	scoreFelt    := fmt.Sprintf("0x%x", score)
 
+	// Compute tier from score; pass as both threshold and requested_tier per Cairo signature:
+	// verify_credit_proof(wallet, score, threshold, requested_tier, proof_nonce)
+	tier      := scoreToTier(score)
+	tierFelt  := fmt.Sprintf("0x%x", tier)
+
+	// proof_nonce: use current 10-minute bucket for determinism
+	nonceFelt := fmt.Sprintf("0x%x", time.Now().Unix()/600)
+
 	payload := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"method":  "starknet_call",
 		"params": []interface{}{
 			map[string]interface{}{
-				"contract_address":   s.verifierAddress,
-				"entry_point_selector": feltSelector("verify_credit"),
-				"calldata":           []string{borrowerFelt, scoreFelt},
+				"contract_address":     s.verifierAddress,
+				"entry_point_selector": feltSelector("verify_credit_proof"),
+				"calldata":             []string{borrowerFelt, scoreFelt, tierFelt, tierFelt, nonceFelt},
 			},
 			"latest",
 		},
@@ -271,15 +283,14 @@ func padFelt(addr string) string {
 	return "0x" + fmt.Sprintf("%064s", addr)
 }
 
-// feltSelector returns the Starknet function selector for a short name.
-// For simplicity we use the Starknet pedersen hash convention expressed as
-// the keccak256 of the ASCII name, truncated to felt252 range.
-// A production implementation should pre-compute this using starknet-py.
+// feltSelector returns the Starknet sn_keccak selector for a function name.
+// sn_keccak(name) = first 250 bits of keccak256(ASCII(name)).
+// Ref: https://docs.starknet.io/documentation/architecture_and_concepts/Smart_Contracts/function-selector/
 func feltSelector(name string) string {
-	b := hashBytes([]byte(name))
-	n := new(big.Int).SetBytes(b)
-	// Starknet felt252 max is 2^251 + 17*2^192 + 1 — we just use the lower 31 bytes which is safe
-	mask := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 251), big.NewInt(1))
+	hash := crypto.Keccak256([]byte(name))
+	n := new(big.Int).SetBytes(hash)
+	// Mask to 250 bits: (1 << 250) - 1
+	mask := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 250), big.NewInt(1))
 	n.And(n, mask)
 	return "0x" + n.Text(16)
 }

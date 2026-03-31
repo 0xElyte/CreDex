@@ -1,9 +1,58 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { clsx } from "clsx";
 
+// ─── Chain helpers (landing page — no wallet required) ────────────────────────
+const CHAIN_NAMES: Record<string, string> = {
+  "0x1":      "MAINNET",
+  "0x89":     "POLYGON",
+  "0xaa36a7": "SEPOLIA",
+  "0x106a":   "SEPOLIA",
+  "0x14a34":  "BASE_SEPOLIA",
+};
+const SEPOLIA_PUBLIC_RPC = "https://ethereum-sepolia-rpc.publicnode.com";
+
+async function fetchLiveBlock(): Promise<{ chainLabel: string; blockHex: string }> {
+  // Try MetaMask first (no pop-up — just reads)
+  if (typeof window !== "undefined" && window.ethereum) {
+    try {
+      const [chainHex, blockHex] = await Promise.all([
+        window.ethereum.request({ method: "eth_chainId" }) as Promise<string>,
+        window.ethereum.request({ method: "eth_blockNumber" }) as Promise<string>,
+      ]);
+      const chainLabel = CHAIN_NAMES[chainHex.toLowerCase()] ?? chainHex.toUpperCase();
+      return { chainLabel, blockHex };
+    } catch { /* fall through */ }
+  }
+  // Fallback: public Sepolia JSON-RPC
+  const res = await fetch(SEPOLIA_PUBLIC_RPC, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", method: "eth_blockNumber", params: [], id: 1 }),
+  });
+  const json = await res.json() as { result: string };
+  return { chainLabel: "SEPOLIA", blockHex: json.result };
+}
+
 export default function LandingPage() {
+  const [chainLabel, setChainLabel] = useState("SEPOLIA");
+  const [blockNumber, setBlockNumber] = useState<number | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const refresh = async () => {
+      try {
+        const { chainLabel: cl, blockHex } = await fetchLiveBlock();
+        if (!mounted) return;
+        setChainLabel(cl);
+        setBlockNumber(parseInt(blockHex, 16));
+      } catch { /* silent — keep previous value */ }
+    };
+    refresh();
+    const iv = setInterval(refresh, 12_000); // ~1 Ethereum block
+    return () => { mounted = false; clearInterval(iv); };
+  }, []);
 
   useEffect(() => {
     // Nav scroll effect
@@ -61,7 +110,7 @@ export default function LandingPage() {
           <div className="font-mono text-sm text-[#999] tracking-widest uppercase flex items-center gap-3 mb-10">
             <span className="w-8 h-px bg-white/30 inline-block" />
             <span className="w-2 h-2 bg-white rounded-full inline-block animate-pulse" />
-            Network Live · Block #21,482,110 · 99.98% Uptime
+            Network Live · Block #{blockNumber !== null ? blockNumber.toLocaleString() : "…"} · {chainLabel}
           </div>
 
           <h1 className="font-display leading-none tracking-wide max-w-5xl mb-8 text-white" style={{ fontSize: "clamp(72px,11vw,148px)" }}>
@@ -282,7 +331,7 @@ export default function LandingPage() {
           <span className="font-mono text-xs text-[#888]">© 2026 LENDR PROTOCOL. ALL RIGHTS RESERVED.</span>
           <div className="flex items-center gap-2 font-mono text-xs text-[#888]">
             <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
-            MAINNET · BLOCK #21,482,110
+            {chainLabel} · BLOCK #{blockNumber !== null ? blockNumber.toLocaleString() : "…"}
           </div>
         </div>
       </footer>

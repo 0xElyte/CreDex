@@ -49,11 +49,12 @@ export function useZKProof() {
         collateralAsset: payload.collateralAsset,
         aprRate: result.aprRate,
         healthFactor: result.healthFactor,
-        dueDate: new Date(Date.now() + payload.duration * 86_400_000).toISOString(),
+        dueDate: result.dueDate ?? new Date(Date.now() + payload.duration * 86_400_000).toISOString(),
         repaidPercent: 0,
         status: "active",
         openedAt: new Date().toISOString(),
         txHash: result.txHash,
+        solidityLoanId: result.solidityLoanId,
       };
       dispatch(addLoan(newLoan));
       dispatch(setConfirmed({ txHash: result.txHash, proofHash: result.proofHash }));

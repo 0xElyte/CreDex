@@ -1,28 +1,141 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
-import { usePoolStats, useActivityFeed, useCreditScore } from "@/hooks/useQueries";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { usePoolStats, useActivityFeed, useProtocolBalances } from "@/hooks/useQueries";
 import { useDeposit } from "@/hooks/useDeposit";
 import { useWalletGuard } from "@/hooks/useWalletGuard";
+import { useWallet } from "@/hooks/useWallet";
+import { mintUSDC, mintCOLL } from "@/lib/api";
 import { useAppSelector, useAppDispatch } from "@/store/hooks";
 import { resetDepositFlow } from "@/store/financeSlice";
 import { DepositModal } from "@/components/lend/DepositModal";
 import { StatCard, SectionLabel, ProgressBar, StatusPill } from "@/components/ui";
 import { gsap } from "gsap";
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  ResponsiveContainer,
   PieChart, Pie, Cell,
 } from "recharts";
-import { ChartWrapper } from "@/components/ui/ChartWrapper";
 
-const APY_DATA = [
-  { month:"Jan", apy:11.2 },{ month:"Feb", apy:12.1 },
-  { month:"Mar", apy:11.8 },{ month:"Apr", apy:13.4 },
-  { month:"May", apy:14.0 },{ month:"Jun", apy:13.7 },
-  { month:"Jul", apy:14.2 },{ month:"Aug", apy:14.5 },
-  { month:"Sep", apy:14.7 },{ month:"Oct", apy:14.82 },
-];
 
-// ─── Pool Stats ────────────────────────────────────────────────────────────────
+// ─── Get Test Tokens Banner ─────────────────────────────────────────────────────────
+function GetTestTokensBanner() {
+  const { refreshBalance }                    = useWallet();
+  const walletAddress                         = useAppSelector((s) => s.wallet.address);
+  const [mintingUsdc,  setMintingUsdc]        = useState(false);
+  const [mintingColl,  setMintingColl]        = useState(false);
+  const [stepMsg,      setStepMsg]            = useState("");
+  const [usdcDone,     setUsdcDone]           = useState(false);
+  const [collDone,     setCollDone]           = useState(false);
+  const [mintError,    setMintError]          = useState<string | null>(null);
+
+  const isMinting = mintingUsdc || mintingColl;
+
+  // Sepolia RPCs can lag 1-3 blocks behind the latest mined tx.
+  // Refresh immediately then again after 3 s and 7 s to catch the propagated state.
+  const refreshWithRetry = useCallback(async () => {
+    await refreshBalance();
+    setTimeout(() => { refreshBalance().catch(() => {}); }, 3_000);
+    setTimeout(() => { refreshBalance().catch(() => {}); }, 7_000);
+  }, [refreshBalance]);
+
+  const handleMintUsdc = async () => {
+    if (!walletAddress || isMinting) return;
+    setMintingUsdc(true);
+    setMintError(null);
+    setUsdcDone(false);
+    try {
+      await mintUSDC(walletAddress, setStepMsg);
+      setUsdcDone(true);
+      await refreshWithRetry();
+    } catch (err: unknown) {
+      setMintError(err instanceof Error ? err.message : "Mint failed");
+    } finally {
+      setMintingUsdc(false);
+      setStepMsg("");
+    }
+  };
+
+  const handleMintColl = async () => {
+    if (!walletAddress || isMinting) return;
+    setMintingColl(true);
+    setMintError(null);
+    setCollDone(false);
+    try {
+      await mintCOLL(walletAddress, setStepMsg);
+      setCollDone(true);
+      await refreshWithRetry();
+    } catch (err: unknown) {
+      setMintError(err instanceof Error ? err.message : "Mint failed");
+    } finally {
+      setMintingColl(false);
+      setStepMsg("");
+    }
+  };
+
+  return (
+    <div className="bg-[#0c0c0c] border border-[#1a1a1a] px-5 py-3">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="font-mono text-xs text-[#777] uppercase tracking-widest">Sepolia Testnet</p>
+          <p className="font-mono text-sm text-[#aaa] mt-0.5">
+            {isMinting ? stepMsg : "Need test tokens? Mint free mUSDC or mCOLL to try the protocol."}
+          </p>
+          {mintError && <p className="font-mono text-xs text-red-400 mt-1">{mintError}</p>}
+        </div>
+        <div className="flex gap-2 shrink-0">
+          <button
+            onClick={handleMintUsdc}
+            disabled={isMinting || !walletAddress}
+            className="font-mono text-xs px-4 py-2 border border-[#333] text-[#ccc] hover:border-[#555] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {mintingUsdc ? "Minting..." : usdcDone ? "Mint Again" : "Get mUSDC"}
+          </button>
+          <button
+            onClick={handleMintColl}
+            disabled={isMinting || !walletAddress}
+            className="font-mono text-xs px-4 py-2 border border-[#333] text-[#ccc] hover:border-[#555] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {mintingColl ? "Minting..." : collDone ? "Mint Again" : "Get mCOLL"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Protocol + Wallet Balances Bar ──────────────────────────────────────────────────
+function ProtocolBalancesBar() {
+  const wallet = useAppSelector((s) => s.wallet);
+  const { data: proto } = useProtocolBalances();
+
+  const fmt = (n: number) => n.toLocaleString("en", { maximumFractionDigits: 2 });
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-white/[0.05]">
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Your mUSDC</p>
+        <p className="font-mono text-xl text-white">{fmt(wallet.balance)}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Available to deposit</p>
+      </div>
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Your mCOLL</p>
+        <p className="font-mono text-xl text-white">{fmt(wallet.collateralBalance)}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Collateral asset</p>
+      </div>
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Protocol mUSDC</p>
+        <p className="font-mono text-xl text-white">{proto ? fmt(proto.lendingAsset) : "—"}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Total deposited</p>
+      </div>
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Protocol mCOLL</p>
+        <p className="font-mono text-xl text-white">{proto ? fmt(proto.collateralAsset) : "—"}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Collateral locked</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Pool Stats ───────────────────────────────────────────────────────────────
 function PoolStatsBar() {
   const { data, isLoading } = usePoolStats();
   const fmt = (n: number) =>
@@ -65,8 +178,8 @@ function DepositForm({ onDeposit, isPending }: { onDeposit: (amount: number) => 
   const { data: pool } = usePoolStats();
   const [amount, setAmount] = useState(10000);
 
-  const apy = pool?.apy ?? 14.82;
-  const tvl = pool?.tvl ?? 142509211;
+  const apy = pool?.apy ?? 0;
+  const tvl = pool?.tvl ?? 0;
   const monthlyYield = (amount * apy / 100) / 12;
   const yearlyYield = amount * apy / 100;
   const sharePercent = (amount / tvl) * 100;
@@ -81,8 +194,8 @@ function DepositForm({ onDeposit, isPending }: { onDeposit: (amount: number) => 
           </p>
         </div>
         <span className="font-mono text-xs text-[#888] border border-white/[0.08] px-2 py-1 shrink-0">
-          Wallet: {wallet.balance.toLocaleString()} USDC
-        </span>
+            {wallet.balance.toLocaleString()} mUSDC · {wallet.collateralBalance.toLocaleString()} mCOLL
+          </span>
       </div>
 
       {/* Input */}
@@ -126,27 +239,11 @@ function DepositForm({ onDeposit, isPending }: { onDeposit: (amount: number) => 
         ))}
       </div>
 
-      {/* APY chart */}
+      {/* Current APY */}
       <div>
-        <SectionLabel>APY History</SectionLabel>
-        <ChartWrapper height={120}>
-        <ResponsiveContainer width="100%" height={120}>
-          <AreaChart data={APY_DATA}>
-            <defs>
-              <linearGradient id="apyGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#fff" stopOpacity={0.06} />
-                <stop offset="95%" stopColor="#fff" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <XAxis dataKey="month" tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
-            <Tooltip
-              contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,.07)", borderRadius: 0, fontFamily: "DM Mono", fontSize: 12 }}
-              labelStyle={{ color: "#555" }} itemStyle={{ color: "#fff" }} />
-            <Area type="monotone" dataKey="apy" stroke="rgba(255,255,255,0.5)" strokeWidth={1.5} fill="url(#apyGrad)" />
-          </AreaChart>
-        </ResponsiveContainer>
-        </ChartWrapper>
+        <SectionLabel>Current APY</SectionLabel>
+        <p className="font-mono text-4xl text-white mt-2">{pool ? `${pool.apy.toFixed(2)}%` : "—"}</p>
+        <p className="font-mono text-xs text-[#777] mt-1">Variable rate · computed from live tier definitions</p>
       </div>
 
       <button
@@ -168,7 +265,7 @@ function DepositForm({ onDeposit, isPending }: { onDeposit: (amount: number) => 
 // ─── Utilization Donut ─────────────────────────────────────────────────────────
 function UtilizationDonut() {
   const { data } = usePoolStats();
-  const utilized = data ? Math.round(data.utilizationRate * 100) : 75;
+  const utilized = data ? Math.round(data.utilizationRate * 100) : 0;
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
@@ -200,8 +297,8 @@ function UtilizationDonut() {
       </div>
       <div className="mt-5 space-y-2">
         {[
-          { label: "Active Loans", col: "bg-white", value: `$${data ? (data.activeLoanValue / 1e6).toFixed(1) : "106.8"}M` },
-          { label: "Available Cash", col: "bg-[#1e1e1e]", value: `$${data ? (data.availableCash / 1e6).toFixed(1) : "35.7"}M` },
+          { label: "Active Loans", col: "bg-white", value: data ? `$${(data.activeLoanValue / 1e6).toFixed(1)}M` : "—" },
+          { label: "Available Cash", col: "bg-[#1e1e1e]", value: data ? `$${(data.availableCash / 1e6).toFixed(1)}M` : "—" },
         ].map((r) => (
           <div key={r.label} className="flex items-center justify-between font-mono text-xs">
             <div className="flex items-center gap-2">
@@ -330,9 +427,8 @@ function MyDeposits() {
 export default function LendPage() {
   useWalletGuard();
 
-  const { executeDeposit, isPending, error: depositError } = useDeposit();
+  const { executeDeposit, isPending, error: depositError, stepText } = useDeposit();
   const depositSuccess = useAppSelector((s) => s.finance.depositSuccess);
-  const depositTxHash  = useAppSelector((s) => s.finance.depositTxHash);
   const dispatch       = useAppDispatch();
   const [pendingAmount, setPendingAmount] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -369,6 +465,12 @@ export default function LendPage() {
         </div>
       </div>
 
+      {/* Testnet token faucet */}
+      <div className="lend-animate"><GetTestTokensBanner /></div>
+
+      {/* Balances bar */}
+      <div className="lend-animate"><ProtocolBalancesBar /></div>
+
       {/* Pool stats */}
       <div className="lend-animate"><PoolStatsBar /></div>
 
@@ -393,6 +495,7 @@ export default function LendPage() {
           amount={pendingAmount}
           isPending={isPending}
           error={depositError ?? null}
+          stepText={stepText}
           onClose={() => { dispatch(resetDepositFlow()); setPendingAmount(null); }}
         />
       )}

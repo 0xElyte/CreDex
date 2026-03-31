@@ -3,7 +3,7 @@ import { useState, useCallback } from "react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { updateBalance } from "@/store/walletSlice";
 import { confirmDeposit, startDeposit } from "@/store/financeSlice";
-import { backendApi } from "@/lib/backendApi";
+import { executeDeposit } from "@/lib/api";
 
 export function useDeposit() {
   const dispatch      = useAppDispatch();
@@ -11,8 +11,9 @@ export function useDeposit() {
   const walletBalance = useAppSelector((s) => s.wallet.balance);
   const [isPending,  setIsPending]  = useState(false);
   const [error,      setError]      = useState<string | null>(null);
+  const [stepText,   setStepText]   = useState<string>("");
 
-  const executeDeposit = useCallback(async (amount: number) => {
+  const handleDeposit = useCallback(async (amount: number) => {
     if (!walletAddress) {
       setError("Wallet not connected");
       return;
@@ -24,36 +25,38 @@ export function useDeposit() {
 
     setIsPending(true);
     setError(null);
+    setStepText("Initiating deposit...");
     dispatch(startDeposit(amount));
 
     try {
-      // Call real Go backend deposit endpoint
-      const result = await backendApi.deposit(walletAddress, amount);
+      const result = await executeDeposit(walletAddress, amount, setStepText);
 
-      // Update Redux with confirmed deposit
+      // Generate a deposit position ID
+      const depositId = `DEP-${walletAddress.slice(2, 6).toUpperCase()}-${Date.now() % 100000}`;
+
       dispatch(confirmDeposit({
-        txHash:   result.tx_hash,
+        txHash:   result.txHash,
         position: {
-          id:           result.deposit_id,
-          amount:       result.amount_usdc,
-          sharePercent: result.share_percent,
+          id:           depositId,
+          amount,
+          sharePercent: 0,        // on-chain share computed separately
           earnedYield:  0,
-          depositedAt:  result.deposited_at,
-          currentValue: result.amount_usdc,
+          depositedAt:  new Date().toISOString(),
+          currentValue: amount,
         },
       }));
 
-      // Deduct from wallet balance immediately
+      // Refresh wallet balance after on-chain deduction
       dispatch(updateBalance({ balance: Math.max(0, walletBalance - amount) }));
 
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Deposit failed";
       setError(msg);
-      console.error("[deposit] failed:", err);
     } finally {
       setIsPending(false);
+      setStepText("");
     }
   }, [walletAddress, walletBalance, dispatch]);
 
-  return { executeDeposit, isPending, error };
+  return { executeDeposit: handleDeposit, isPending, error, stepText };
 }

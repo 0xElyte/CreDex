@@ -9,13 +9,39 @@ import { backendApi } from "@/lib/backendApi";
 import type { CreditTier, Loan } from "@/types";
 
 // ─── USDC contract addresses ──────────────────────────────────────────────────
-// Circle's official USDC on each network
+// Mock USDC (mUSDC) deployed on Sepolia for hackathon demo
 const USDC_CONTRACTS: Record<string, string> = {
-  "0xaa36a7": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Sepolia (11155111)
+  "0xaa36a7": "0x0ed7269d9Cc82b16E9E6D0f40c3bbF64c6Be17c2", // Sepolia — mUSDC (mock)
   "0x1":      "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // Mainnet
   "0x89":     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", // Polygon
-  "0x106a":   "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Sepolia alt chain ID
-  "0x14a34":  "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Base Sepolia
+  "0x106a":   "0x0ed7269d9Cc82b16E9E6D0f40c3bbF64c6Be17c2", // Sepolia alt chain ID — mUSDC
+  "0x14a34":  "0x0ed7269d9Cc82b16E9E6D0f40c3bbF64c6Be17c2", // Base Sepolia — mUSDC
+};
+
+// ─── Human-readable chain names ───────────────────────────────────────────────
+export const CHAIN_NAMES: Record<string, string> = {
+  "0x1":      "ETH_MAINNET",
+  "0x89":     "POLYGON",
+  "0xaa36a7": "ETH_SEPOLIA",
+  "0x106a":   "ETH_SEPOLIA",
+  "0x14a34":  "BASE_SEPOLIA",
+};
+
+async function getChainId(): Promise<string> {
+  if (!window.ethereum) return "";
+  try {
+    return ((await window.ethereum.request({ method: "eth_chainId" })) as string).toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+// ─── Collateral contract addresses ───────────────────────────────────────────
+// Mock Collateral (mCOLL) deployed on Sepolia for hackathon demo
+const COLL_CONTRACTS: Record<string, string> = {
+  "0xaa36a7": "0x2858Cb1D9C7b2e0420d04A0E988c4C425eF50964", // Sepolia — mCOLL (newly deployed)
+  "0x106a":   "0x2858Cb1D9C7b2e0420d04A0E988c4C425eF50964", // Sepolia alt chain ID
+  "0x14a34":  "0x2858Cb1D9C7b2e0420d04A0E988c4C425eF50964", // Base Sepolia
 };
 
 // balanceOf(address) selector = keccak256("balanceOf(address)")[0:4]
@@ -63,6 +89,39 @@ async function fetchUSDCBalance(address: string): Promise<number> {
   }
 }
 
+// Fetch mCOLL (collateral token) balance via eth_call
+async function fetchCollateralBalance(address: string): Promise<number> {
+  if (!window.ethereum) return 0;
+
+  try {
+    const chainHex = await window.ethereum.request({
+      method: "eth_chainId",
+    }) as string;
+
+    const collContract = COLL_CONTRACTS[chainHex.toLowerCase()];
+    if (!collContract) return 0;
+
+    const paddedAddress = address.slice(2).toLowerCase().padStart(64, "0");
+    const callData      = BALANCE_OF_SELECTOR + paddedAddress;
+
+    const result = await window.ethereum.request({
+      method: "eth_call",
+      params: [{ to: collContract, data: callData }, "latest"],
+    }) as string;
+
+    if (!result || result === "0x") return 0;
+
+    // mCOLL has 6 decimals
+    const raw = BigInt(result);
+    const balance = Number(raw) / 1_000_000;
+    return Math.floor(balance * 100) / 100;
+
+  } catch (err) {
+    console.warn("[wallet] fetchCollateralBalance failed:", err);
+    return 0;
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function parseTier(tier: string): CreditTier {
@@ -84,7 +143,7 @@ function goLoansToFrontend(
     id:               l.loan_id,
     borrowedAmount:   l.amount_usdc,
     collateralAmount: 0,
-    collateralAsset:  "WETH" as const,
+    collateralAsset:  "mCOLL" as const,
     aprRate:          l.interest_apr / 100,
     healthFactor:     2.0,
     dueDate:          l.due_date,
@@ -94,6 +153,7 @@ function goLoansToFrontend(
                     : "active" as const,
     openedAt:         l.created_at,
     txHash:           l.tx_hash ?? "",
+    solidityLoanId:   l.solidity_loan_id,
   }));
 }
 
@@ -113,25 +173,19 @@ async function loadLoansFromBackend(
     ];
     dispatch(setLoans(allLoans));
 
-    // Load real deposit positions if any exist
-    if (depositStatus?.deposits?.length) {
-      const { confirmDeposit: confirm } = await import("@/store/financeSlice");
-      for (const d of depositStatus.deposits) {
-        dispatch(confirm({
-          txHash:   d.tx_hash,
-          position: {
-            id:           d.deposit_id,
-            amount:       d.amount_usdc,
-            sharePercent: d.share_percent,
-            earnedYield:  d.earned_yield,
-            depositedAt:  d.deposited_at,
-            currentValue: d.current_value,
-          },
-        }));
-      }
-    }
+    // Load real deposit positions (replaces array to avoid duplicates on re-connect)
+    const { setDeposits } = await import("@/store/financeSlice");
+    const positions = (depositStatus?.deposits ?? []).map((d: import("@/lib/backendApi").GoDepositRecord) => ({
+      id:           d.deposit_id,
+      amount:       d.amount_usdc,
+      sharePercent: d.share_percent,
+      earnedYield:  d.earned_yield,
+      depositedAt:  d.deposited_at,
+      currentValue: d.current_value,
+    }));
+    dispatch(setDeposits(positions));
   } catch (err) {
-    console.warn("[wallet] Failed to load from backend:", err);
+    console.warn("[wallet] Failed to load from backend (offline?):", err instanceof Error ? err.message : String(err));
     dispatch(setLoans([]));
   }
 }
@@ -159,21 +213,26 @@ async function getTelegramChatId(): Promise<number> {
 }
 
 async function postConnect(address: string): Promise<CreditTier> {
-  // Register wallet — include Telegram chat ID if available
-  getTelegramChatId().then((chatId) => {
-    if (chatId) {
-      backendApi.registerWallet(address, chatId).catch((err) => {
-        console.warn("[wallet] register with telegram failed:", err);
-      });
-    }
+  backendApi.registerWallet(address).catch((err) => {
+    console.warn("[wallet] register failed (non-fatal):", err instanceof Error ? err.message : String(err));
   });
-  try {
-    const score = await backendApi.getScore(address);
-    return parseTier(score.tier);
-  } catch (err) {
-    console.warn("[wallet] score fetch failed, defaulting to Bronze:", err);
-    return "Bronze";
+  // Retry once after 2 s — handles transient 503 when scoring engine is starting up
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const score = await backendApi.getScore(address);
+      return parseTier(score.tier);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (attempt === 0 && (msg.includes("503") || msg.includes("unavailable") || msg.includes("Failed to fetch"))) {
+        console.warn("[wallet] score fetch failed (attempt 1), retrying in 2 s…");
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+      console.warn("[wallet] score fetch failed, defaulting to Bronze:", msg);
+      return "Bronze";
+    }
   }
+  return "Bronze";
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -195,14 +254,18 @@ export function useWallet() {
         const newAddress = addrs[0].toLowerCase();
         if (newAddress !== wallet.address) {
           dispatch(clearLoans());
-          const [tier, usdcBalance] = await Promise.all([
+          const [chainId, tier, usdcBalance, collateralBalance] = await Promise.all([
+            getChainId(),
             postConnect(newAddress),
             fetchUSDCBalance(newAddress),
+            fetchCollateralBalance(newAddress),
           ]);
           dispatch(setConnected({
-            address:    newAddress,
-            balance:    usdcBalance,
-            ethBalance: 0,
+            address:          newAddress,
+            chainId,
+            balance:          usdcBalance,
+            collateralBalance,
+            ethBalance:       0,
             tier,
           }));
           loadLoansFromBackend(newAddress, dispatch);
@@ -219,6 +282,30 @@ export function useWallet() {
       window.ethereum!.removeListener("chainChanged",    handleChainChanged);
     };
   }, [dispatch, wallet.address]);
+
+  // Auto-detect already-connected MetaMask account on mount
+  useEffect(() => {
+    if (!hasEthereum() || wallet.status !== "disconnected") return;
+    (async () => {
+      try {
+        const accounts = await window.ethereum!.request({ method: "eth_accounts" }) as string[];
+        if (!accounts || accounts.length === 0) return;
+        const address = accounts[0].toLowerCase();
+        dispatch(setConnecting());
+        const [chainId, tier, usdcBalance, collateralBalance] = await Promise.all([
+          getChainId(),
+          postConnect(address),
+          fetchUSDCBalance(address),
+          fetchCollateralBalance(address),
+        ]);
+        dispatch(setConnected({ address, chainId, balance: usdcBalance, collateralBalance, ethBalance: 0, tier }));
+        loadLoansFromBackend(address, dispatch);
+      } catch (err) {
+        console.warn("[wallet] auto-detect failed:", err);
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Connect
   const connect = useCallback(async () => {
@@ -241,19 +328,23 @@ export function useWallet() {
         address = "0x4e8f2d1a9b3c7e0f5d2a8b1c4e7f0a3d6b9c2e5f";
       }
 
-      // Fetch tier + USDC balance concurrently
-      const [tier, usdcBalance] = await Promise.all([
+      // Fetch tier + USDC + collateral balance concurrently
+      const [chainId, tier, usdcBalance, collateralBalance] = await Promise.all([
+        getChainId(),
         postConnect(address),
         fetchUSDCBalance(address),
+        fetchCollateralBalance(address),
       ]);
 
-      console.info(`[wallet] USDC balance: ${usdcBalance}`);
+      console.info(`[wallet] USDC balance: ${usdcBalance}, mCOLL balance: ${collateralBalance}`);
 
       // Set connected with real balance
       dispatch(setConnected({
         address,
-        balance:    usdcBalance,
-        ethBalance: 0,
+        chainId,
+        balance:          usdcBalance,
+        collateralBalance,
+        ethBalance:       0,
         tier,
       }));
 
@@ -274,17 +365,25 @@ export function useWallet() {
 
   const refreshBalance = useCallback(async () => {
     if (!wallet.address) return;
-    const balance = await fetchUSDCBalance(wallet.address);
-    dispatch(updateBalance({ balance }));
+    const [balance, collateralBalance] = await Promise.all([
+      fetchUSDCBalance(wallet.address),
+      fetchCollateralBalance(wallet.address),
+    ]);
+    dispatch(updateBalance({ balance, collateralBalance }));
   }, [dispatch, wallet.address]);
 
   const shortAddress = wallet.address
     ? `${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`
     : null;
 
+  const chainName = wallet.chainId
+    ? (CHAIN_NAMES[wallet.chainId] ?? wallet.chainId.toUpperCase())
+    : null;
+
   return {
     ...wallet,
     shortAddress,
+    chainName,
     isConnected:  wallet.status === "connected",
     isConnecting: wallet.status === "connecting",
     connect,

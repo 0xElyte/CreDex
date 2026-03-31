@@ -26,11 +26,13 @@ export function DepositModal({
   amount,
   isPending,
   error,
+  stepText,
   onClose,
 }: {
   amount:    number;
   isPending: boolean;
   error:     string | null;
+  stepText?: string;
   onClose:   () => void;
 }) {
   const dispatch      = useAppDispatch();
@@ -114,9 +116,9 @@ export function DepositModal({
               {error
                 ? error
                 : depositSuccess
-                  ? "Deposit confirmed. Earning yield now."
+                  ? "Deposit confirmed on-chain. Earning yield now."
                   : isPending
-                    ? <>Submitting deposit to Lendr protocol<span className="blink ml-0.5">_</span></>
+                    ? <>{stepText || "Submitting deposit to protocol"}<span className="blink ml-0.5">_</span></>
                     : "Awaiting confirmation..."}
             </p>
           </div>

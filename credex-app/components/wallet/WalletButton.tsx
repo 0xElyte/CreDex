@@ -9,7 +9,7 @@ const TIER_ICON: Record<string, string> = {
 };
 
 export function WalletButton() {
-  const { status, shortAddress, tier, balance, connect, disconnect } = useWallet();
+  const { status, shortAddress, tier, balance, collateralBalance, connect, disconnect } = useWallet();
   const dispatch = useAppDispatch();
 
   const handleDisconnect = () => { dispatch(clearToasts()); disconnect(); };
@@ -20,6 +20,10 @@ export function WalletButton() {
         <div className="hidden sm:flex items-center gap-1.5 font-mono text-sm text-[#aaa] border border-white/[0.1] px-3 py-2 bg-[#0a0a0a]">
           <span className="text-white font-medium">{balance.toLocaleString("en", { maximumFractionDigits: 0 })}</span>
           <span>USDC</span>
+        </div>
+        <div className="hidden sm:flex items-center gap-1.5 font-mono text-sm text-[#aaa] border border-white/[0.1] px-3 py-2 bg-[#0a0a0a]">
+          <span className="text-white font-medium">{collateralBalance.toLocaleString("en", { maximumFractionDigits: 0 })}</span>
+          <span>mCOLL</span>
         </div>
         {tier && (
           <span className="hidden sm:block font-mono text-xs text-[#999] border border-white/[0.1] px-2.5 py-2 uppercase tracking-widest">

@@ -5,7 +5,9 @@ export type CreditTier = "Bronze" | "Silver" | "Gold" | "Platinum";
 export interface WalletState {
   status: WalletStatus;
   address: string | null;
+  chainId: string | null; // e.g. "0xaa36a7" (Sepolia)
   balance: number; // USDC
+  collateralBalance: number; // mCOLL
   ethBalance: number;
   tier: CreditTier | null;
   zkProofActive: boolean;
@@ -41,7 +43,7 @@ export interface Loan {
   id: string;
   borrowedAmount: number; // USDC
   collateralAmount: number;
-  collateralAsset: "WETH" | "WBTC" | "stETH";
+  collateralAsset: "mCOLL";
   aprRate: number;
   healthFactor: number;
   dueDate: string; // ISO string
@@ -49,6 +51,7 @@ export interface Loan {
   status: LoanStatus;
   openedAt: string;
   txHash: string;
+  solidityLoanId?: number; // uint256 loanId from CredexLending.requestLoan()
 }
 
 // ─── ZK Proof Flow ────────────────────────────────────────────────────────────
@@ -75,7 +78,7 @@ export interface ZKProofState {
 // ─── Borrow Request Payload ───────────────────────────────────────────────────
 export interface BorrowRequestPayload {
   amount: number; // USDC
-  collateralAsset: "WETH" | "WBTC" | "stETH";
+  collateralAsset: "mCOLL";
   duration: 30 | 60 | 90 | 180;
   walletAddress: string;
 }
@@ -87,6 +90,7 @@ export interface BorrowRequestResult {
   aprRate: number;
   healthFactor: number;
   collateralRequired: number;
+  solidityLoanId?: number; // uint256 from CredexLending contract
   // Go backend extras
   collateralPct?: number;
   dueDate?: string;
@@ -159,6 +163,7 @@ export interface PortfolioStats {
   globalRank: number;
   reliabilityPercent: number;
   activeObligations: number;
+  streakCount: number;
 }
 
 // ─── Score History ────────────────────────────────────────────────────────────
@@ -190,7 +195,7 @@ export interface ApiResponse<T> {
 
 // ─── Collateral Options ───────────────────────────────────────────────────────
 export interface CollateralOption {
-  asset: "WETH" | "WBTC" | "stETH";
+  asset: "mCOLL";
   available: number;
   usdPrice: number;
   ltv: number; // max LTV for this asset

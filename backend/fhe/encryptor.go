@@ -29,8 +29,8 @@ import (
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const (
-	relayerTimeout    = 15 * time.Second
-	maxResponseBytes  = 512 * 1024 // 512 KB
+	relayerTimeout   = 15 * time.Second
+	maxResponseBytes = 512 * 1024 // 512 KB
 )
 
 // ── Relayer Client ────────────────────────────────────────────────────────────
@@ -49,8 +49,8 @@ func NewRelayerClient() *RelayerClient {
 	)
 	contract := os.Getenv("LENDING_CONTRACT_ADDRESS")
 
+	// Only exclude obvious placeholder values — the real Zama endpoint is allowed
 	configured := url != "" &&
-		url != "https://relayer.sepolia.zama.ai" &&
 		contract != "" &&
 		contract != "0x0000000000000000000000000000000000000000"
 
@@ -91,9 +91,9 @@ func (r *RelayerClient) EncryptScore(score int) (*models.EncryptResult, error) {
 	}
 
 	payload, err := json.Marshal(map[string]interface{}{
-		"value":            score,
-		"type":             "euint32",
-		"contractAddress":  r.contractAddress,
+		"value":           score,
+		"type":            "euint32",
+		"contractAddress": r.contractAddress,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("fhe: failed to marshal encrypt request: %w", err)
@@ -164,7 +164,7 @@ func (r *RelayerClient) mockEncrypt(score int) *models.EncryptResult {
 	// Deterministic mock handle — same score always produces same handle
 	h := sha256.Sum256([]byte(fmt.Sprintf("mock_fhe_score_%d", score)))
 	handle := "0x" + hex.EncodeToString(h[:16]) // 32-char handle
-	proof  := "0x" + hex.EncodeToString(h[16:])
+	proof := "0x" + hex.EncodeToString(h[16:])
 
 	fmt.Printf("[FHE] Mock encrypted score %d → handle %s\n", score, handle)
 

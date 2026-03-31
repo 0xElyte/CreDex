@@ -65,6 +65,19 @@ type LoanRequest struct {
 	ChainID       int     `json:"chain_id"`
 }
 
+type LoanConfirmRequest struct {
+	WalletAddress   string  `json:"wallet_address" binding:"required"`
+	LoanID          string  `json:"loan_id" binding:"required"`
+	AmountUSDC      float64 `json:"amount_usdc" binding:"required"`
+	CollateralPct   int     `json:"collateral_pct" binding:"required"`
+	InterestAPR     float64 `json:"interest_apr" binding:"required"`
+	Tier            string  `json:"tier" binding:"required"`
+	TxHash          string  `json:"tx_hash" binding:"required"`
+	ProofID         string  `json:"proof_id,omitempty"`
+	ProofData       string  `json:"proof_data,omitempty"`
+	SolidityLoanID  uint64  `json:"solidity_loan_id,omitempty"`
+}
+
 type LoanRecord struct {
 	LoanID        string     `json:"loan_id"`
 	WalletAddress string     `json:"wallet_address"`
@@ -81,6 +94,7 @@ type LoanRecord struct {
 	EncryptedHandle  string `json:"encrypted_handle,omitempty"`
 	ZKProofHash      string `json:"zk_proof_hash,omitempty"`
 	OnChainConfirmed bool   `json:"on_chain_confirmed"`
+	SolidityLoanID   uint64 `json:"solidity_loan_id,omitempty"`
 }
 
 type LoanRequestResponse struct {
@@ -100,6 +114,7 @@ type LoanRequestResponse struct {
 	ProofData   string `json:"proof_data,omitempty"`
 	RelayTxHash string `json:"relay_tx_hash,omitempty"`
 	ProofExpiry string `json:"proof_expiry,omitempty"`
+	SolidityLoanID uint64 `json:"solidity_loan_id,omitempty"`
 }
 
 type LoanStatusResponse struct {
@@ -120,7 +135,7 @@ type RepayRequest struct {
 
 type RegisterRequest struct {
 	WalletAddress  string `json:"wallet_address"   binding:"required"`
-	TelegramChatID int64  `json:"telegram_chat_id" binding:"required"`
+	TelegramChatID int64  `json:"telegram_chat_id"` // optional — 0 means no Telegram set up
 }
 
 type WalletRecord struct {

@@ -1,14 +1,14 @@
 "use client";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAppSelector, useAppDispatch } from "@/store/hooks";
 import { useZKProof } from "@/hooks/useZKProof";
-import { ensureMUSDCApproval } from "@/hooks/useWallet";
-import { useCollateralOptions, useCreditScore } from "@/hooks/useQueries";
+import { useCollateralOptions, useCreditScore, useProtocolBalances } from "@/hooks/useQueries";
 import { useWalletGuard } from "@/hooks/useWalletGuard";
 import { useToast } from "@/hooks/useToast";
 import { ZKProofModal } from "@/components/borrow/ZKProofModal";
 import { updateLoanRepayment } from "@/store/financeSlice";
-import { submitRepayment } from "@/lib/api";
+import { submitRepayment, mintUSDC, mintCOLL, DURATION_LTV } from "@/lib/api";
+import { useWallet } from "@/hooks/useWallet";
 import {
   StatCard, SectionLabel, ProgressBar, SignalRow, StatusPill, Table, TableRow, Td,
 } from "@/components/ui";
@@ -20,57 +20,126 @@ import { ChartWrapper } from "@/components/ui/ChartWrapper";
 import type { BorrowRequestPayload } from "@/types";
 import { clsx } from "clsx";
 
-// ─── Etherscan link helper ────────────────────────────────────────────────────
-function EtherscanLink({ hash, label }: { hash: string; label?: string }) {
-  if (!hash || hash.length < 10) return null;
+
+// ─── Get Test Tokens Banner ────────────────────────────────────────────────────
+function GetTestTokensBanner() {
+  const { refreshBalance }                    = useWallet();
+  const walletAddress                         = useAppSelector((s) => s.wallet.address);
+  const [mintingUsdc,  setMintingUsdc]        = useState(false);
+  const [mintingColl,  setMintingColl]        = useState(false);
+  const [stepMsg,      setStepMsg]            = useState("");
+  const [usdcDone,     setUsdcDone]           = useState(false);
+  const [collDone,     setCollDone]           = useState(false);
+  const [mintError,    setMintError]          = useState<string | null>(null);
+
+  const isMinting = mintingUsdc || mintingColl;
+
+  // Sepolia RPCs can lag 1-3 blocks behind the latest mined tx.
+  // Refresh immediately then again after 3 s and 7 s to catch the propagated state.
+  const refreshWithRetry = useCallback(async () => {
+    await refreshBalance();
+    setTimeout(() => { refreshBalance().catch(() => {}); }, 3_000);
+    setTimeout(() => { refreshBalance().catch(() => {}); }, 7_000);
+  }, [refreshBalance]);
+
+  const handleMintUsdc = async () => {
+    if (!walletAddress || isMinting) return;
+    setMintingUsdc(true);
+    setMintError(null);
+    setUsdcDone(false);
+    try {
+      await mintUSDC(walletAddress, setStepMsg);
+      setUsdcDone(true);
+      await refreshWithRetry();
+    } catch (err: unknown) {
+      setMintError(err instanceof Error ? err.message : "Mint failed");
+    } finally {
+      setMintingUsdc(false);
+      setStepMsg("");
+    }
+  };
+
+  const handleMintColl = async () => {
+    if (!walletAddress || isMinting) return;
+    setMintingColl(true);
+    setMintError(null);
+    setCollDone(false);
+    try {
+      await mintCOLL(walletAddress, setStepMsg);
+      setCollDone(true);
+      await refreshWithRetry();
+    } catch (err: unknown) {
+      setMintError(err instanceof Error ? err.message : "Mint failed");
+    } finally {
+      setMintingColl(false);
+      setStepMsg("");
+    }
+  };
+
   return (
-    <a
-      href={`https://sepolia.etherscan.io/tx/${hash}`}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="font-mono text-xs text-[#aaa] hover:text-white transition-colors underline underline-offset-2 decoration-white/20 hover:decoration-white/60 truncate max-w-[120px] block"
-      title={hash}
-    >
-      {label ?? `${hash.slice(0, 10)}...${hash.slice(-4)}`}
-    </a>
+    <div className="bg-[#0c0c0c] border border-[#1a1a1a] px-5 py-3">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="font-mono text-xs text-[#777] uppercase tracking-widest">Sepolia Testnet</p>
+          <p className="font-mono text-sm text-[#aaa] mt-0.5">
+            {isMinting ? stepMsg : "Need test tokens? Mint free mUSDC or mCOLL to try the protocol."}
+          </p>
+          {mintError && <p className="font-mono text-xs text-red-400 mt-1">{mintError}</p>}
+        </div>
+        <div className="flex gap-2 shrink-0">
+          <button
+            onClick={handleMintUsdc}
+            disabled={isMinting || !walletAddress}
+            className="font-mono text-xs px-4 py-2 border border-[#333] text-[#ccc] hover:border-[#555] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {mintingUsdc ? "Minting..." : usdcDone ? "Mint Again" : "Get mUSDC"}
+          </button>
+          <button
+            onClick={handleMintColl}
+            disabled={isMinting || !walletAddress}
+            className="font-mono text-xs px-4 py-2 border border-[#333] text-[#ccc] hover:border-[#555] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {mintingColl ? "Minting..." : collDone ? "Mint Again" : "Get mCOLL"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
-// ─── Countdown helper ──────────────────────────────────────────────────────────
-function useCountdown(dueDate: string) {
-  const [timeLeft, setTimeLeft] = useState("");
-  useEffect(() => {
-    const calc = () => {
-      const diff = new Date(dueDate).getTime() - Date.now();
-      if (diff <= 0) { setTimeLeft("Overdue"); return; }
-      const d = Math.floor(diff / 86400000);
-      const h = Math.floor((diff % 86400000) / 3600000);
-      setTimeLeft(d > 0 ? `${d}d ${h}h` : `${h}h`);
-    };
-    calc();
-    const iv = setInterval(calc, 60_000);
-    return () => clearInterval(iv);
-  }, [dueDate]);
-  return timeLeft;
+// ─── Wallet + Protocol Balances Bar ───────────────────────────────────────────
+function WalletProtocolBalancesBar() {
+  const wallet = useAppSelector((s) => s.wallet);
+  const { data: proto } = useProtocolBalances();
+  const fmt = (n: number) => n.toLocaleString("en", { maximumFractionDigits: 2 });
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-white/[0.05]">
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Your mUSDC</p>
+        <p className="font-mono text-xl text-white">{fmt(wallet.balance)}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Receive on borrow</p>
+      </div>
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Your mCOLL</p>
+        <p className="font-mono text-xl text-white">{fmt(wallet.collateralBalance)}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Post as collateral</p>
+      </div>
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Protocol mUSDC</p>
+        <p className="font-mono text-xl text-white">{proto ? fmt(proto.lendingAsset) : "—"}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Available to borrow</p>
+      </div>
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Protocol mCOLL</p>
+        <p className="font-mono text-xl text-white">{proto ? fmt(proto.collateralAsset) : "—"}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Collateral locked</p>
+      </div>
+    </div>
+  );
 }
 
-// ─── Repayment chart data ──────────────────────────────────────────────────────
-const REPAY_DATA = [
-  { month: "May", borrowed: 45000, repaid: 10000 },
-  { month: "Jun", borrowed: 57000, repaid: 22000 },
-  { month: "Jul", borrowed: 57000, repaid: 31000 },
-  { month: "Aug", borrowed: 57000, repaid: 40000 },
-  { month: "Sep", borrowed: 57000, repaid: 52000 },
-  { month: "Oct", borrowed: 57000, repaid: 57000 },
-];
-
-const HEALTH_DATA = [
-  { day: "D1", hf: 2.1 }, { day: "D7", hf: 2.0 }, { day: "D14", hf: 1.95 },
-  { day: "D21", hf: 1.88 }, { day: "D28", hf: 1.84 }, { day: "Today", hf: 1.82 },
-];
-
 // ─── Borrow Form ───────────────────────────────────────────────────────────────
-// Backend loan limits (from Go store/store.go)
 const MIN_LOAN_USDC = 10;
 const MAX_LOAN_USDC = 10_000;
 
@@ -79,17 +148,18 @@ function BorrowForm({ onSubmit }: { onSubmit: (p: BorrowRequestPayload) => void 
   const { data: collateral = [] } = useCollateralOptions();
   const { data: score } = useCreditScore();
   const [amount, setAmount] = useState(1000);
-  const [asset, setAsset] = useState<"WETH" | "WBTC" | "stETH">("WETH");
+  const [asset, setAsset] = useState<"mCOLL">("mCOLL");
   const [duration, setDuration] = useState<30 | 60 | 90 | 180>(30);
 
   // Tier-based max: use score.maxLTV to derive cap, but hard cap is $10,000
   const tierMaxLoan = MAX_LOAN_USDC;
 
   const selectedAsset = collateral.find((c) => c.asset === asset);
+  const effectiveLTV = DURATION_LTV[duration] ?? selectedAsset?.ltv ?? 0.80;
   const collateralRequired = selectedAsset
-    ? amount / selectedAsset.usdPrice / selectedAsset.ltv
+    ? amount / selectedAsset.usdPrice / effectiveLTV
     : 0;
-  const ltv = Math.min(90, Math.round((amount / ((collateralRequired || 1) * (selectedAsset?.usdPrice || 2650))) * 100));
+  const ltv = Math.min(90, Math.round((amount / ((collateralRequired || 1) * (selectedAsset?.usdPrice || 1.00))) * 100));
   const monthlyInterest = Math.round((amount * (score?.aprRate ?? 0.042) * 12) / 12);
 
   // Validation
@@ -137,7 +207,7 @@ function BorrowForm({ onSubmit }: { onSubmit: (p: BorrowRequestPayload) => void 
           >
             {collateral.map((c) => (
               <option key={c.asset} value={c.asset}>
-                {c.asset} — {c.available.toFixed(2)} avail · ${c.usdPrice.toLocaleString()}
+                {c.asset}
               </option>
             ))}
           </select>
@@ -204,20 +274,31 @@ function LoanTable() {
   const dispatch = useAppDispatch();
   const loans = useAppSelector((s) => s.finance.loans);
   const walletAddress = useAppSelector((s) => s.wallet.address);
-  const { success: toastSuccess, info: toastInfo } = useToast();
+  const { data: score } = useCreditScore();
+  const { success: toastSuccess, info: toastInfo, error: toastError } = useToast();
   const [repayingId, setRepayingId] = useState<string | null>(null);
 
-  const repayLoan = useCallback(async (id: string, amount: number) => {
-    setRepayingId(id);
-    toastInfo("Processing Repayment", `Submitting repayment for ${id}...`);
-    try {
-      if (walletAddress) await submitRepayment(walletAddress, id);
-    } catch (err) {
-      console.warn("[repay] backend call failed (updating local state anyway):", err);
+  const repayLoan = useCallback(async (id: string, amount: number, solidityLoanId: number | undefined) => {
+    if (!walletAddress) return;
+    if (!solidityLoanId) {
+      toastError("Repayment Failed", "On-chain loan ID not found. Try reconnecting your wallet.");
+      return;
     }
-    dispatch(updateLoanRepayment({ id, repaidPercent: 100 }));
-    setRepayingId(null);
-    toastSuccess("Repayment Confirmed", `${amount.toLocaleString()} USDC · ${id} closed`);
+    setRepayingId(id);
+    toastInfo("Processing Repayment", "Starting repayment...");
+    try {
+      await submitRepayment(walletAddress, id, solidityLoanId, (msg) => {
+        toastInfo("Processing Repayment", msg);
+      });
+      dispatch(updateLoanRepayment({ id, repaidPercent: 100 }));
+      toastSuccess("Repayment Confirmed", `${amount.toLocaleString()} USDC · ${id} closed`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Repayment failed.";
+      toastError("Repayment Failed", message);
+      console.error("[repay]", err);
+    } finally {
+      setRepayingId(null);
+    }
   }, [dispatch, toastSuccess, toastInfo, walletAddress]);
 
   const active = loans.filter((l) => l.status === "active");
@@ -228,7 +309,7 @@ function LoanTable() {
       <div className="flex items-center justify-between">
         <p className="font-display text-lg text-white tracking-wide">Active Loan Positions</p>
         <div className="flex items-center gap-4 font-mono text-xs text-[#888]">
-          <span>STREAK: <span className="text-white">412 DAYS 🔥</span></span>
+          <span>STREAK: <span className="text-white">{score?.repaymentStreak ?? 0} DAYS {score?.repaymentStreak ? "🔥" : ""}</span></span>
           <span className="text-[#aaa]">|</span>
           <span>{active.length} ACTIVE · {closed.length} CLOSED</span>
         </div>
@@ -273,7 +354,7 @@ function LoanTable() {
               </Td>
               <Td>
                 <button
-                  onClick={() => repayLoan(loan.id, loan.borrowedAmount)}
+                  onClick={() => repayLoan(loan.id, loan.borrowedAmount, loan.solidityLoanId)}
                   disabled={repayingId === loan.id}
                   className="font-mono text-xs tracking-wide uppercase text-[#999] border border-white/[0.1] px-3 py-1.5 hover:text-white hover:border-white/25 transition-all disabled:opacity-30 flex items-center gap-1.5"
                 >
@@ -373,6 +454,31 @@ function ScorePanel() {
 // ─── Charts Row ────────────────────────────────────────────────────────────────
 function ChartsRow() {
   const [activeTab, setActiveTab] = useState<"volume" | "health">("volume");
+  const loans = useAppSelector((s) => s.finance.loans);
+
+  const repayChartData = useMemo(() => {
+    if (loans.length === 0) return [];
+    const byMonth = new Map<string, { borrowed: number; repaid: number }>();
+    for (const loan of loans) {
+      const key = loan.openedAt.slice(0, 7);
+      if (!byMonth.has(key)) byMonth.set(key, { borrowed: 0, repaid: 0 });
+      const entry = byMonth.get(key)!;
+      entry.borrowed += loan.borrowedAmount;
+      if (loan.status === "repaid") entry.repaid += loan.borrowedAmount;
+    }
+    return Array.from(byMonth.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, d]) => ({
+        month: new Date(month + "-01").toLocaleString("en", { month: "short" }),
+        borrowed: d.borrowed, repaid: d.repaid,
+      }));
+  }, [loans]);
+
+  const healthChartData = useMemo(() =>
+    loans
+      .filter(l => l.status === "active")
+      .map((l, i) => ({ day: `L${i + 1}`, hf: l.healthFactor })),
+  [loans]);
 
   return (
     <div className="card p-6">
@@ -399,49 +505,50 @@ function ChartsRow() {
       </div>
 
       {activeTab === "volume" && (
-        <ChartWrapper height={200}>
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={REPAY_DATA} barGap={2}>
-            <XAxis dataKey="month" tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false}
-              tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`} />
-            <Tooltip
-              contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,.07)", borderRadius: 0, fontFamily: "DM Mono", fontSize: 12 }}
-              labelStyle={{ color: "#555" }} itemStyle={{ color: "#fff" }}
-              formatter={(v: unknown) => [`$${Number(v).toLocaleString()}`, undefined as never]} />
-            <Bar dataKey="borrowed" name="Borrowed" fill="rgba(255,255,255,0.15)" radius={[1, 1, 0, 0]} />
-            <Bar dataKey="repaid" name="Repaid" fill="rgba(255,255,255,0.06)" radius={[1, 1, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-        </ChartWrapper>
+        repayChartData.length === 0
+          ? <p className="font-mono text-sm text-[#777] py-8 text-center">No loan history yet.</p>
+          : <ChartWrapper height={200}>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={repayChartData} barGap={2}>
+                <XAxis dataKey="month" tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false}
+                  tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`} />
+                <Tooltip
+                  contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,.07)", borderRadius: 0, fontFamily: "DM Mono", fontSize: 12 }}
+                  labelStyle={{ color: "#555" }} itemStyle={{ color: "#fff" }}
+                  formatter={(v: unknown) => [`$${Number(v).toLocaleString()}`, undefined as never]} />
+                <Bar dataKey="borrowed" name="Borrowed" fill="rgba(255,255,255,0.15)" radius={[1, 1, 0, 0]} />
+                <Bar dataKey="repaid" name="Repaid" fill="rgba(255,255,255,0.06)" radius={[1, 1, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+            </ChartWrapper>
       )}
 
       {activeTab === "health" && (
-        <ChartWrapper height={200}>
-        <ResponsiveContainer width="100%" height={200}>
-          <AreaChart data={HEALTH_DATA}>
-            <defs>
-              <linearGradient id="hfGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#fff" stopOpacity={0.06} />
-                <stop offset="95%" stopColor="#fff" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <XAxis dataKey="day" tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
-            <YAxis domain={[1.5, 2.5]} tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
-            <Tooltip
-              contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,.07)", borderRadius: 0, fontFamily: "DM Mono", fontSize: 12 }}
-              labelStyle={{ color: "#555" }} itemStyle={{ color: "#fff" }} />
-            <Area type="monotone" dataKey="hf" name="Health Factor"
-              stroke="rgba(255,255,255,0.7)" strokeWidth={1.5} fill="url(#hfGrad)" />
-          </AreaChart>
-        </ResponsiveContainer>
-        </ChartWrapper>
+        healthChartData.length === 0
+          ? <p className="font-mono text-sm text-[#777] py-8 text-center">No active loans.</p>
+          : <ChartWrapper height={200}>
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={healthChartData}>
+                <defs>
+                  <linearGradient id="hfGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#fff" stopOpacity={0.06} />
+                    <stop offset="95%" stopColor="#fff" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="day" tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "#888", fontSize: 12, fontFamily: "DM Mono" }} axisLine={false} tickLine={false} />
+                <Tooltip
+                  contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,.07)", borderRadius: 0, fontFamily: "DM Mono", fontSize: 12 }}
+                  labelStyle={{ color: "#555" }} itemStyle={{ color: "#fff" }} />
+                <Area type="monotone" dataKey="hf" name="Health Factor"
+                  stroke="rgba(255,255,255,0.7)" strokeWidth={1.5} fill="url(#hfGrad)" />
+              </AreaChart>
+            </ResponsiveContainer>
+            </ChartWrapper>
       )}
 
       <div className="flex flex-wrap gap-3 mt-3 font-mono text-xs text-[#777]">
-        <span>CPU: 88.2%</span>
-        <span>ENTROPY: 0.99923</span>
-        <span>ZK Latency: 142ms</span>
         <span className="ml-auto">LAST SYNC: <span className="text-white">just now</span></span>
       </div>
     </div>
@@ -453,7 +560,7 @@ export default function BorrowPage() {
   useWalletGuard();
 
   const { data: score, isError: scoreError } = useCreditScore();
-  const scoringDown = scoreError || (score && score.hash === "8f3d...912a");
+  const scoringDown = scoreError || (score && score.hash === "----...----");
 
   const loans = useAppSelector((s) => s.finance.loans);
   const activeLoanVolume = loans.reduce((a, l) => a + (l.status === "active" ? l.borrowedAmount : 0), 0);
@@ -510,9 +617,14 @@ export default function BorrowPage() {
         </div>
       </div>
 
+      {/* Testnet token faucet */}
+      <div className="borrow-animate"><GetTestTokensBanner /></div>
+
+      {/* Wallet + Protocol Balances */}
+      <div className="borrow-animate"><WalletProtocolBalancesBar /></div>
+
       {/* Scoring engine offline banner */}
-      {scoringDown && (
-        <div className="borrow-animate flex items-center gap-3 border border-white/[0.1] bg-white/[0.02] px-4 py-3">
+      {scoringDown && (        <div className="borrow-animate flex items-center gap-3 border border-white/[0.1] bg-white/[0.02] px-4 py-3">
           <span className="w-2 h-2 rounded-full bg-[#888] shrink-0" />
           <p className="font-mono text-sm text-[#aaa]">
             Credit scoring engine offline — score data is estimated.

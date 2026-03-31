@@ -84,6 +84,7 @@ func main() {
 		api.POST("/score", h.ComputeScore)
 		api.GET("/score/:wallet", h.GetScore)
 		api.POST("/loan/request", h.RequestLoan)
+		api.POST("/loan/confirm", h.ConfirmLoan)
 		api.GET("/loan/status/:wallet", h.GetLoanStatus)
 		api.POST("/loan/repay", h.RepayLoan)
 		api.POST("/wallet/register", h.RegisterWallet)

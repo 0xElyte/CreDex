@@ -32,9 +32,11 @@ import (
 )
 
 const (
-	relayTimeout = 60 * time.Second
+	relayTimeout = 120 * time.Second // relay + mine confirmation
 	// Gas limit sufficient for relay() — stores one SSTORE (~20k) + event (~1k) + overhead
 	relayGasLimit = uint64(120_000)
+	// receipt poll interval
+	receiptPollInterval = 3 * time.Second
 )
 
 // ── Relayer ───────────────────────────────────────────────────────────────────
@@ -52,9 +54,9 @@ type Relayer struct {
 // NewRelayer reads EVM_RPC_URL, RELAYED_VERIFIER_ADDRESS and
 // RELAYER_PRIVATE_KEY from the environment.
 func NewRelayer() *Relayer {
-	rpcURL     := strings.TrimRight(os.Getenv("EVM_RPC_URL"), "/")
+	rpcURL := strings.TrimRight(os.Getenv("EVM_RPC_URL"), "/")
 	contractHex := os.Getenv("RELAYED_VERIFIER_ADDRESS")
-	privKeyHex  := os.Getenv("RELAYER_PRIVATE_KEY")
+	privKeyHex := os.Getenv("RELAYER_PRIVATE_KEY")
 
 	configured := rpcURL != "" &&
 		contractHex != "" &&
@@ -81,7 +83,7 @@ func NewRelayer() *Relayer {
 		r.configured = false
 		return r
 	}
-	r.privateKey    = key
+	r.privateKey = key
 	r.publicAddress = crypto.PubkeyToAddress(key.PublicKey)
 	fmt.Printf("[RELAY] Relayer wallet: %s → contract: %s\n", r.publicAddress.Hex(), contractHex)
 
@@ -97,7 +99,7 @@ func NewRelayer() *Relayer {
 // frontend must pass to CredexLending.requestLoan().
 func (r *Relayer) RelayProof(
 	borrower string,
-	sn       *relayer.StarknetProofResult,
+	sn *relayer.StarknetProofResult,
 ) (*models.RelayResult, error) {
 	if !r.configured {
 		return r.mockRelay(borrower, sn), nil
@@ -108,15 +110,22 @@ func (r *Relayer) RelayProof(
 
 	client, err := ethclient.DialContext(ctx, r.rpcURL)
 	if err != nil {
-		fmt.Printf("[RELAY] Cannot connect to EVM RPC (%v) — mocking\n", err)
-		return r.mockRelay(borrower, sn), nil
+		return nil, fmt.Errorf("relay: cannot connect to EVM RPC: %w", err)
 	}
 	defer client.Close()
 
 	txHash, err := r.sendRelayTx(ctx, client, borrower, sn)
 	if err != nil {
-		fmt.Printf("[RELAY] sendRelayTx failed (%v) — mocking\n", err)
-		return r.mockRelay(borrower, sn), nil
+		return nil, fmt.Errorf("relay: send failed: %w", err)
+	}
+	fmt.Printf("[RELAY] relay tx sent: %s — waiting for confirmation...\n", txHash[:18])
+
+	// Wait for the relay tx to be mined before returning. The borrower's
+	// requestLoan() call reads _proofs[proofId] from RelayedCreditVerifier —
+	// if we return before the relay tx is confirmed the lookup returns
+	// bytes32(0) and the contract reverts with InvalidProof.
+	if err := waitForReceipt(ctx, client, txHash); err != nil {
+		return nil, fmt.Errorf("relay: confirmation failed for tx %s: %w", txHash[:18], err)
 	}
 
 	// Build the proofData bytes the borrower sends to requestLoan()
@@ -136,10 +145,10 @@ func (r *Relayer) RelayProof(
 // ── EVM transaction ───────────────────────────────────────────────────────────
 
 func (r *Relayer) sendRelayTx(
-	ctx     context.Context,
-	client  *ethclient.Client,
+	ctx context.Context,
+	client *ethclient.Client,
 	borrower string,
-	sn      *relayer.StarknetProofResult,
+	sn *relayer.StarknetProofResult,
 ) (string, error) {
 	chainID, err := client.ChainID(ctx)
 	if err != nil {
@@ -197,6 +206,32 @@ func (r *Relayer) sendRelayTx(
 	}
 
 	return signed.Hash().Hex(), nil
+}
+
+// ── Receipt waiting ───────────────────────────────────────────────────────────
+
+// waitForReceipt polls until the tx is mined or ctx is cancelled.
+// Returns an error if the tx reverted (status == 0) or timed out.
+func waitForReceipt(ctx context.Context, client *ethclient.Client, txHash string) error {
+	hash := common.HexToHash(txHash)
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("relay: timed out waiting for receipt of %s", txHash)
+		case <-time.After(receiptPollInterval):
+		}
+
+		receipt, err := client.TransactionReceipt(ctx, hash)
+		if err != nil {
+			// Not yet mined — keep polling
+			continue
+		}
+		if receipt.Status == 0 {
+			return fmt.Errorf("relay: relay() transaction %s reverted on-chain", txHash)
+		}
+		fmt.Printf("[RELAY] relay tx %s confirmed in block %d\n", txHash[:18], receipt.BlockNumber.Uint64())
+		return nil
+	}
 }
 
 // ── ABI encoding ──────────────────────────────────────────────────────────────
