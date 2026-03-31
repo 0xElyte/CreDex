@@ -2,12 +2,13 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAppSelector, useAppDispatch } from "@/store/hooks";
 import { useZKProof } from "@/hooks/useZKProof";
-import { useCollateralOptions, useCreditScore } from "@/hooks/useQueries";
+import { useCollateralOptions, useCreditScore, useProtocolBalances } from "@/hooks/useQueries";
 import { useWalletGuard } from "@/hooks/useWalletGuard";
 import { useToast } from "@/hooks/useToast";
 import { ZKProofModal } from "@/components/borrow/ZKProofModal";
 import { updateLoanRepayment } from "@/store/financeSlice";
-import { submitRepayment } from "@/lib/api";
+import { submitRepayment, mintUSDC, mintCOLL, DURATION_LTV } from "@/lib/api";
+import { useWallet } from "@/hooks/useWallet";
 import {
   StatCard, SectionLabel, ProgressBar, SignalRow, StatusPill, Table, TableRow, Td,
 } from "@/components/ui";
@@ -20,8 +21,125 @@ import type { BorrowRequestPayload } from "@/types";
 import { clsx } from "clsx";
 
 
+// ─── Get Test Tokens Banner ────────────────────────────────────────────────────
+function GetTestTokensBanner() {
+  const { refreshBalance }                    = useWallet();
+  const walletAddress                         = useAppSelector((s) => s.wallet.address);
+  const [mintingUsdc,  setMintingUsdc]        = useState(false);
+  const [mintingColl,  setMintingColl]        = useState(false);
+  const [stepMsg,      setStepMsg]            = useState("");
+  const [usdcDone,     setUsdcDone]           = useState(false);
+  const [collDone,     setCollDone]           = useState(false);
+  const [mintError,    setMintError]          = useState<string | null>(null);
+
+  const isMinting = mintingUsdc || mintingColl;
+
+  // Sepolia RPCs can lag 1-3 blocks behind the latest mined tx.
+  // Refresh immediately then again after 3 s and 7 s to catch the propagated state.
+  const refreshWithRetry = useCallback(async () => {
+    await refreshBalance();
+    setTimeout(() => { refreshBalance().catch(() => {}); }, 3_000);
+    setTimeout(() => { refreshBalance().catch(() => {}); }, 7_000);
+  }, [refreshBalance]);
+
+  const handleMintUsdc = async () => {
+    if (!walletAddress || isMinting) return;
+    setMintingUsdc(true);
+    setMintError(null);
+    setUsdcDone(false);
+    try {
+      await mintUSDC(walletAddress, setStepMsg);
+      setUsdcDone(true);
+      await refreshWithRetry();
+    } catch (err: unknown) {
+      setMintError(err instanceof Error ? err.message : "Mint failed");
+    } finally {
+      setMintingUsdc(false);
+      setStepMsg("");
+    }
+  };
+
+  const handleMintColl = async () => {
+    if (!walletAddress || isMinting) return;
+    setMintingColl(true);
+    setMintError(null);
+    setCollDone(false);
+    try {
+      await mintCOLL(walletAddress, setStepMsg);
+      setCollDone(true);
+      await refreshWithRetry();
+    } catch (err: unknown) {
+      setMintError(err instanceof Error ? err.message : "Mint failed");
+    } finally {
+      setMintingColl(false);
+      setStepMsg("");
+    }
+  };
+
+  return (
+    <div className="bg-[#0c0c0c] border border-[#1a1a1a] px-5 py-3">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="font-mono text-xs text-[#777] uppercase tracking-widest">Sepolia Testnet</p>
+          <p className="font-mono text-sm text-[#aaa] mt-0.5">
+            {isMinting ? stepMsg : "Need test tokens? Mint free mUSDC or mCOLL to try the protocol."}
+          </p>
+          {mintError && <p className="font-mono text-xs text-red-400 mt-1">{mintError}</p>}
+        </div>
+        <div className="flex gap-2 shrink-0">
+          <button
+            onClick={handleMintUsdc}
+            disabled={isMinting || !walletAddress}
+            className="font-mono text-xs px-4 py-2 border border-[#333] text-[#ccc] hover:border-[#555] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {mintingUsdc ? "Minting..." : usdcDone ? "Mint Again" : "Get mUSDC"}
+          </button>
+          <button
+            onClick={handleMintColl}
+            disabled={isMinting || !walletAddress}
+            className="font-mono text-xs px-4 py-2 border border-[#333] text-[#ccc] hover:border-[#555] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {mintingColl ? "Minting..." : collDone ? "Mint Again" : "Get mCOLL"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Wallet + Protocol Balances Bar ───────────────────────────────────────────
+function WalletProtocolBalancesBar() {
+  const wallet = useAppSelector((s) => s.wallet);
+  const { data: proto } = useProtocolBalances();
+  const fmt = (n: number) => n.toLocaleString("en", { maximumFractionDigits: 2 });
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-white/[0.05]">
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Your mUSDC</p>
+        <p className="font-mono text-xl text-white">{fmt(wallet.balance)}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Receive on borrow</p>
+      </div>
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Your mCOLL</p>
+        <p className="font-mono text-xl text-white">{fmt(wallet.collateralBalance)}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Post as collateral</p>
+      </div>
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Protocol mUSDC</p>
+        <p className="font-mono text-xl text-white">{proto ? fmt(proto.lendingAsset) : "—"}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Available to borrow</p>
+      </div>
+      <div className="bg-[#0c0c0c] p-4">
+        <p className="font-mono text-xs text-[#777] uppercase tracking-widest mb-1">Protocol mCOLL</p>
+        <p className="font-mono text-xl text-white">{proto ? fmt(proto.collateralAsset) : "—"}</p>
+        <p className="font-mono text-xs text-[#555] mt-1">Collateral locked</p>
+      </div>
+    </div>
+  );
+}
+
 // ─── Borrow Form ───────────────────────────────────────────────────────────────
-// Backend loan limits (from Go store/store.go)
 const MIN_LOAN_USDC = 10;
 const MAX_LOAN_USDC = 10_000;
 
@@ -37,10 +155,11 @@ function BorrowForm({ onSubmit }: { onSubmit: (p: BorrowRequestPayload) => void 
   const tierMaxLoan = MAX_LOAN_USDC;
 
   const selectedAsset = collateral.find((c) => c.asset === asset);
+  const effectiveLTV = DURATION_LTV[duration] ?? selectedAsset?.ltv ?? 0.80;
   const collateralRequired = selectedAsset
-    ? amount / selectedAsset.usdPrice / selectedAsset.ltv
+    ? amount / selectedAsset.usdPrice / effectiveLTV
     : 0;
-  const ltv = Math.min(90, Math.round((amount / ((collateralRequired || 1) * (selectedAsset?.usdPrice || 2650))) * 100));
+  const ltv = Math.min(90, Math.round((amount / ((collateralRequired || 1) * (selectedAsset?.usdPrice || 1.00))) * 100));
   const monthlyInterest = Math.round((amount * (score?.aprRate ?? 0.042) * 12) / 12);
 
   // Validation
@@ -156,20 +275,30 @@ function LoanTable() {
   const loans = useAppSelector((s) => s.finance.loans);
   const walletAddress = useAppSelector((s) => s.wallet.address);
   const { data: score } = useCreditScore();
-  const { success: toastSuccess, info: toastInfo } = useToast();
+  const { success: toastSuccess, info: toastInfo, error: toastError } = useToast();
   const [repayingId, setRepayingId] = useState<string | null>(null);
 
-  const repayLoan = useCallback(async (id: string, amount: number) => {
-    setRepayingId(id);
-    toastInfo("Processing Repayment", `Submitting repayment for ${id}...`);
-    try {
-      if (walletAddress) await submitRepayment(walletAddress, id);
-    } catch (err) {
-      console.warn("[repay] backend call failed (updating local state anyway):", err);
+  const repayLoan = useCallback(async (id: string, amount: number, solidityLoanId: number | undefined) => {
+    if (!walletAddress) return;
+    if (!solidityLoanId) {
+      toastError("Repayment Failed", "On-chain loan ID not found. Try reconnecting your wallet.");
+      return;
     }
-    dispatch(updateLoanRepayment({ id, repaidPercent: 100 }));
-    setRepayingId(null);
-    toastSuccess("Repayment Confirmed", `${amount.toLocaleString()} USDC · ${id} closed`);
+    setRepayingId(id);
+    toastInfo("Processing Repayment", "Starting repayment...");
+    try {
+      await submitRepayment(walletAddress, id, solidityLoanId, (msg) => {
+        toastInfo("Processing Repayment", msg);
+      });
+      dispatch(updateLoanRepayment({ id, repaidPercent: 100 }));
+      toastSuccess("Repayment Confirmed", `${amount.toLocaleString()} USDC · ${id} closed`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Repayment failed.";
+      toastError("Repayment Failed", message);
+      console.error("[repay]", err);
+    } finally {
+      setRepayingId(null);
+    }
   }, [dispatch, toastSuccess, toastInfo, walletAddress]);
 
   const active = loans.filter((l) => l.status === "active");
@@ -225,7 +354,7 @@ function LoanTable() {
               </Td>
               <Td>
                 <button
-                  onClick={() => repayLoan(loan.id, loan.borrowedAmount)}
+                  onClick={() => repayLoan(loan.id, loan.borrowedAmount, loan.solidityLoanId)}
                   disabled={repayingId === loan.id}
                   className="font-mono text-xs tracking-wide uppercase text-[#999] border border-white/[0.1] px-3 py-1.5 hover:text-white hover:border-white/25 transition-all disabled:opacity-30 flex items-center gap-1.5"
                 >
@@ -469,9 +598,14 @@ export default function BorrowPage() {
         </div>
       </div>
 
+      {/* Testnet token faucet */}
+      <div className="borrow-animate"><GetTestTokensBanner /></div>
+
+      {/* Wallet + Protocol Balances */}
+      <div className="borrow-animate"><WalletProtocolBalancesBar /></div>
+
       {/* Scoring engine offline banner */}
-      {scoringDown && (
-        <div className="borrow-animate flex items-center gap-3 border border-white/[0.1] bg-white/[0.02] px-4 py-3">
+      {scoringDown && (        <div className="borrow-animate flex items-center gap-3 border border-white/[0.1] bg-white/[0.02] px-4 py-3">
           <span className="w-2 h-2 rounded-full bg-[#888] shrink-0" />
           <p className="font-mono text-sm text-[#aaa]">
             Credit scoring engine offline — score data is estimated.

@@ -5,6 +5,7 @@ export type CreditTier = "Bronze" | "Silver" | "Gold" | "Platinum";
 export interface WalletState {
   status: WalletStatus;
   address: string | null;
+  chainId: string | null; // e.g. "0xaa36a7" (Sepolia)
   balance: number; // USDC
   collateralBalance: number; // mCOLL
   ethBalance: number;

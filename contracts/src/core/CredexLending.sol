@@ -34,6 +34,7 @@ contract CredexLending is Ownable, ReentrancyGuard {
     mapping(address borrower => CredexTypes.BorrowerProfile profile) private borrowerProfiles;
     mapping(bytes32 proofId => bool consumed) public consumedProofs;
     mapping(CredexTypes.CreditTier tier => CredexTypes.TierConfig config) private tierConfigs;
+    mapping(address lender => uint256 amount) public lenderDeposits;
 
     CredexTypes.PoolState private _poolState;
 
@@ -112,6 +113,30 @@ contract CredexLending is Ownable, ReentrancyGuard {
         debtAsset.safeTransferFrom(msg.sender, address(this), amount);
         _poolState.totalLiquidity += amount;
         _poolState.availableLiquidity += amount;
+    }
+
+    /// @notice Deposit lending asset into the pool to earn yield.
+    /// @dev Caller must approve this contract for `amount` of `debtAsset` first.
+    function deposit(uint256 amount) external nonReentrant {
+        if (amount == 0) revert CredexErrors.InvalidBorrowAmount();
+        debtAsset.safeTransferFrom(msg.sender, address(this), amount);
+        lenderDeposits[msg.sender] += amount;
+        _poolState.totalLiquidity += amount;
+        _poolState.availableLiquidity += amount;
+        emit CredexEvents.LenderDeposited(msg.sender, amount);
+    }
+
+    /// @notice Withdraw previously deposited lending asset.
+    /// @dev Can only withdraw up to your deposited balance and available liquidity.
+    function withdraw(uint256 amount) external nonReentrant {
+        if (amount == 0) revert CredexErrors.InvalidBorrowAmount();
+        if (lenderDeposits[msg.sender] < amount) revert CredexErrors.PoolInsufficientLiquidity();
+        if (_poolState.availableLiquidity < amount) revert CredexErrors.PoolInsufficientLiquidity();
+        lenderDeposits[msg.sender] -= amount;
+        _poolState.availableLiquidity -= amount;
+        _poolState.totalLiquidity -= amount;
+        debtAsset.safeTransfer(msg.sender, amount);
+        emit CredexEvents.LenderWithdrawn(msg.sender, amount);
     }
 
     function withdrawLiquidity(uint256 amount, address to) external onlyOwner nonReentrant {

@@ -13,6 +13,7 @@ import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from "recharts";
+import { useWallet } from "@/hooks/useWallet";
 
 const TOOLTIP_STYLE = {
   contentStyle: { background:"#111", border:"1px solid rgba(255,255,255,.1)", borderRadius:0, fontFamily:"DM Mono", fontSize:12 },
@@ -25,19 +26,31 @@ function useRepay() {
   const dispatch = useAppDispatch();
   const [repayingId, setRepayingId] = useState<string|null>(null);
 
-  const repayLoan = useCallback(async (id: string, amount: number) => {
-    setRepayingId(id);
-    dispatch(addToast({ type:"loading", title:"Processing Repayment", message:`Repaying ${id}...`, duration:0 }));
-    try {
-      const walletAddr = wallet;
-      if (walletAddr) await submitRepayment(walletAddr, id);
-    } catch (err) {
-      console.warn("[repay] backend call failed (updating local state anyway):", err);
+  const repayLoan = useCallback(async (id: string, amount: number, solidityLoanId: number | undefined) => {
+    if (!wallet) return;
+    if (!solidityLoanId) {
+      dispatch(addToast({ type:"error", title:"Repayment Failed", message:"On-chain loan ID not found. Try reconnecting your wallet." }));
+      return;
     }
-    dispatch(dismissLoading());
-    dispatch(updateLoanRepayment({ id, repaidPercent:100 }));
-    setRepayingId(null);
-    dispatch(addToast({ type:"success", title:"Repayment Confirmed", message:`${amount.toLocaleString()} USDC · ${id} closed` }));
+    setRepayingId(id);
+    const loadingToast = dispatch(addToast({ type:"loading", title:"Processing Repayment", message:"Starting repayment...", duration:0 }));
+    void loadingToast;
+    try {
+      await submitRepayment(wallet, id, solidityLoanId, (msg) => {
+        dispatch(addToast({ type:"loading", title:"Processing Repayment", message:msg, duration:0 }));
+      });
+      await refreshBalance();
+      dispatch(dismissLoading());
+      dispatch(updateLoanRepayment({ id, repaidPercent:100 }));
+      dispatch(addToast({ type:"success", title:"Repayment Confirmed", message:`${amount.toLocaleString()} USDC · ${id} closed` }));
+    } catch (err) {
+      dispatch(dismissLoading());
+      const message = err instanceof Error ? err.message : "Repayment failed.";
+      dispatch(addToast({ type:"error", title:"Repayment Failed", message }));
+      console.error("[repay]", err);
+    } finally {
+      setRepayingId(null);
+    }
   }, [dispatch, wallet]);
 
   return { repayLoan, repayingId };
@@ -50,6 +63,8 @@ export default function PortfolioPage() {
   const loans    = useAppSelector(s => s.finance.loans);
   const deposits = useAppSelector(s => s.finance.deposits);
   const { repayLoan, repayingId } = useRepay();
+  const wallet = useWallet();
+  const { refreshBalance } = useWallet();
 
   const active = loans.filter(l => l.status === "active");
   const closed = loans.filter(l => l.status !== "active");
@@ -148,7 +163,7 @@ export default function PortfolioPage() {
                     </Td>
                     <Td>
                       <button
-                        onClick={() => repayLoan(loan.id, loan.borrowedAmount)}
+                        onClick={() => repayLoan(loan.id, loan.borrowedAmount, loan.solidityLoanId)}
                         disabled={repayingId === loan.id}
                         className="font-mono text-xs uppercase tracking-wide text-[#999] border border-white/[0.14] px-3 py-1.5 hover:text-white hover:border-white/30 transition-all disabled:opacity-30 flex items-center gap-1.5"
                       >

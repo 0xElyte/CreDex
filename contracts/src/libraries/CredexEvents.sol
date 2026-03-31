@@ -77,4 +77,10 @@ library CredexEvents {
 
     // Emitted when the verifier contract address is updated.
     event VerifierUpdated(address indexed verifier);
+
+    // Emitted when a lender deposits debt asset into the pool.
+    event LenderDeposited(address indexed lender, uint256 amount);
+
+    // Emitted when a lender withdraws debt asset from the pool.
+    event LenderWithdrawn(address indexed lender, uint256 amount);
 }

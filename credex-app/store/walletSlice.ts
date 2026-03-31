@@ -4,6 +4,7 @@ import type { WalletState, CreditTier } from "@/types";
 const initialState: WalletState = {
   status: "disconnected",
   address: null,
+  chainId: null,
   balance: 0,
   collateralBalance: 0,
   ethBalance: 0,
@@ -23,6 +24,7 @@ export const walletSlice = createSlice({
       state,
       action: PayloadAction<{
         address: string;
+        chainId: string;
         balance: number;
         collateralBalance: number;
         ethBalance: number;
@@ -31,6 +33,7 @@ export const walletSlice = createSlice({
     ) {
       state.status = "connected";
       state.address = action.payload.address;
+      state.chainId = action.payload.chainId;
       state.balance = action.payload.balance;
       state.collateralBalance = action.payload.collateralBalance;
       state.ethBalance = action.payload.ethBalance;
@@ -40,6 +43,7 @@ export const walletSlice = createSlice({
     setDisconnected(state) {
       state.status = "disconnected";
       state.address = null;
+      state.chainId = null;
       state.balance = 0;
       state.collateralBalance = 0;
       state.ethBalance = 0;

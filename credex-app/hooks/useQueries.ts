@@ -4,7 +4,7 @@ import type { PoolStats } from "@/types";
 import {
   fetchPoolStats, fetchActivityFeed,
   fetchCreditScore, fetchCollateralOptions,
-  fetchLendingAsset,
+  fetchLendingAsset, fetchProtocolBalances, fetchUserLenderDeposit,
 } from "@/lib/api";
 import { useAppSelector } from "@/store/hooks";
 
@@ -58,5 +58,27 @@ export function useLendingAsset() {
     queryFn:  fetchLendingAsset,
     staleTime: Infinity, // symbol never changes
     retry: 2,
+  });
+}
+
+// Protocol balances — mUSDC and mCOLL held by the CredexLending contract
+export function useProtocolBalances() {
+  return useQuery({
+    queryKey: ["protocol-balances"],
+    queryFn:  fetchProtocolBalances,
+    refetchInterval: 15_000,
+    staleTime:       10_000,
+  });
+}
+
+// User's on-chain lender deposit amount from lenderDeposits[user] mapping
+export function useUserLenderDeposit() {
+  const address = useAppSelector((s) => s.wallet.address);
+  return useQuery({
+    queryKey: ["user-lender-deposit", address],
+    queryFn:  () => address ? fetchUserLenderDeposit(address) : Promise.resolve(0),
+    enabled:  !!address,
+    refetchInterval: 15_000,
+    staleTime:       10_000,
   });
 }
