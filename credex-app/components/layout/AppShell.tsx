@@ -221,7 +221,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             Live on <span className="text-white">Ethereum Sepolia Testnet</span> — all transactions are real
           </p>
           <a
-            href="https://sepolia.etherscan.io/address/0xf32A9AA02B2cb24676927BF5BC8D8001d6b76476"
+            href="https://sepolia.etherscan.io/address/0x7e9A18f269de75D0b4Cd497d9100eBE6C7Ef1c2E"
             target="_blank"
             rel="noopener noreferrer"
             className="font-mono text-xs text-[#666] hover:text-white transition-colors"
