@@ -400,7 +400,7 @@ export async function ensureMUSDCApproval(
   if (!window.ethereum) return false;
 
   const mUSDC   = "0x0ed7269d9Cc82b16E9E6D0f40c3bbF64c6Be17c2";
-  const lending = "0xf32A9AA02B2cb24676927BF5BC8D8001d6b76476";
+  const lending = "0x7e9A18f269de75D0b4Cd497d9100eBE6C7Ef1c2E";
 
   try {
     const accounts = await window.ethereum.request({ method: "eth_accounts" }) as string[];
@@ -432,7 +432,7 @@ export async function ensureMUSDCApproval(
 
     await window.ethereum.request({
       method: "eth_sendTransaction",
-      params: [{ from: wallet, to: mUSDC, data: "0x" + approveSel }],
+      params: [{ from: wallet, to: mUSDC, data: approveSel }],
     });
 
     return true;
