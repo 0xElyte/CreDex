@@ -21,7 +21,7 @@ const TOOLTIP_STYLE = {
   itemStyle:    { color:"#fff" },
 };
 
-function useRepay() {
+function useRepay(refreshBalance: () => Promise<void>) {
   const wallet = useAppSelector(s => s.wallet.address);
   const dispatch = useAppDispatch();
   const [repayingId, setRepayingId] = useState<string|null>(null);
@@ -51,7 +51,7 @@ function useRepay() {
     } finally {
       setRepayingId(null);
     }
-  }, [dispatch, wallet]);
+  }, [dispatch, wallet, refreshBalance]);
 
   return { repayLoan, repayingId };
 }
@@ -62,9 +62,9 @@ export default function PortfolioPage() {
   const { data: score } = useCreditScore();
   const loans    = useAppSelector(s => s.finance.loans);
   const deposits = useAppSelector(s => s.finance.deposits);
-  const { repayLoan, repayingId } = useRepay();
   const wallet = useWallet();
   const { refreshBalance } = useWallet();
+  const { repayLoan, repayingId } = useRepay(refreshBalance);
 
   const active = loans.filter(l => l.status === "active");
   const closed = loans.filter(l => l.status !== "active");

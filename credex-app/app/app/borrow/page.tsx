@@ -8,7 +8,7 @@ import { useToast } from "@/hooks/useToast";
 import { ZKProofModal } from "@/components/borrow/ZKProofModal";
 import { updateLoanRepayment } from "@/store/financeSlice";
 import { submitRepayment, mintUSDC, mintCOLL, DURATION_LTV } from "@/lib/api";
-import { useWallet } from "@/hooks/useWallet";
+import { useWallet, ensureMUSDCApproval } from "@/hooks/useWallet";
 import {
   StatCard, SectionLabel, ProgressBar, SignalRow, StatusPill, Table, TableRow, Td,
 } from "@/components/ui";
@@ -384,7 +384,18 @@ function LoanTable() {
                 </Td>
                 <Td dim>{new Date(loan.openedAt).toLocaleDateString()}</Td>
                 <Td dim>
-                  <EtherscanLink hash={loan.txHash} />
+                  {loan.txHash ? (
+                    <a
+                      href={`https://sepolia.etherscan.io/tx/${loan.txHash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-mono text-xs text-[#888] hover:text-white underline underline-offset-2 transition-colors"
+                    >
+                      {loan.txHash.slice(0, 8)}…
+                    </a>
+                  ) : (
+                    <span className="font-mono text-xs text-[#555]">—</span>
+                  )}
                 </Td>
               </TableRow>
             ))}
@@ -396,6 +407,25 @@ function LoanTable() {
 }
 
 // ─── Loan Countdown ───────────────────────────────────────────────────────────
+function useCountdown(dueDate: string): string {
+  const [label, setLabel] = useState(() => formatTimeLeft(dueDate));
+  useEffect(() => {
+    const id = setInterval(() => setLabel(formatTimeLeft(dueDate)), 60_000);
+    return () => clearInterval(id);
+  }, [dueDate]);
+  return label;
+}
+
+function formatTimeLeft(dueDate: string): string {
+  const diff = new Date(dueDate).getTime() - Date.now();
+  if (diff <= 0) return "Overdue";
+  const days = Math.floor(diff / 86_400_000);
+  const hours = Math.floor((diff % 86_400_000) / 3_600_000);
+  if (days > 0) return `${days}d ${hours}h`;
+  const mins = Math.floor((diff % 3_600_000) / 60_000);
+  return `${hours}h ${mins}m`;
+}
+
 function LoanCountdown({ dueDate }: { dueDate: string }) {
   const timeLeft = useCountdown(dueDate);
   const isOverdue = timeLeft === "Overdue";

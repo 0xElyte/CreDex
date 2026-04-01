@@ -545,30 +545,6 @@ function aprFromLoanTerms(lt: GoScoreResponse["loan_terms"]): number {
  *   - Default rate: computed from real wallet loan history
  */
 
-// mUSDC contract on Sepolia (deployed by us)
-const DEBT_TOKEN   = "0x0ed7269d9Cc82b16E9E6D0f40c3bbF64c6Be17c2";
-// CredexLending contract on Sepolia (deployed by us)
-const LENDING_ADDR = "0xf32A9AA02B2cb24676927BF5BC8D8001d6b76476";
-// balanceOf(address) selector
-const BALANCE_OF_SEL = "0x70a08231";
-
-async function fetchOnChainTVL(): Promise<number> {
-  if (typeof window === "undefined" || !window.ethereum) return 142_509_211;
-  try {
-    const padded = LENDING_ADDR.slice(2).toLowerCase().padStart(64, "0");
-    const data   = BALANCE_OF_SEL + padded;
-    const result = await window.ethereum.request({
-      method: "eth_call",
-      params: [{ to: DEBT_TOKEN, data }, "latest"],
-    }) as string;
-    if (!result || result === "0x") return 142_509_211;
-    const raw = BigInt(result);
-    // mUSDC has 6 decimals
-    return Math.round(Number(raw) / 1_000_000);
-  } catch {
-    return 142_509_211;
-  }
-}
 
 export async function fetchPoolStats(walletAddress?: string): Promise<PoolStats> {
   try {
