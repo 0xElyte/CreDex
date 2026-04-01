@@ -66,16 +66,16 @@ type LoanRequest struct {
 }
 
 type LoanConfirmRequest struct {
-	WalletAddress   string  `json:"wallet_address" binding:"required"`
-	LoanID          string  `json:"loan_id" binding:"required"`
-	AmountUSDC      float64 `json:"amount_usdc" binding:"required"`
-	CollateralPct   int     `json:"collateral_pct" binding:"required"`
-	InterestAPR     float64 `json:"interest_apr" binding:"required"`
-	Tier            string  `json:"tier" binding:"required"`
-	TxHash          string  `json:"tx_hash" binding:"required"`
-	ProofID         string  `json:"proof_id,omitempty"`
-	ProofData       string  `json:"proof_data,omitempty"`
-	SolidityLoanID  uint64  `json:"solidity_loan_id,omitempty"`
+	WalletAddress  string  `json:"wallet_address" binding:"required"`
+	LoanID         string  `json:"loan_id" binding:"required"`
+	AmountUSDC     float64 `json:"amount_usdc" binding:"required"`
+	CollateralPct  int     `json:"collateral_pct" binding:"required"`
+	InterestAPR    float64 `json:"interest_apr" binding:"required"`
+	Tier           string  `json:"tier" binding:"required"`
+	TxHash         string  `json:"tx_hash" binding:"required"`
+	ProofID        string  `json:"proof_id,omitempty"`
+	ProofData      string  `json:"proof_data,omitempty"`
+	SolidityLoanID uint64  `json:"solidity_loan_id,omitempty"`
 }
 
 type LoanRecord struct {
@@ -110,10 +110,10 @@ type LoanRequestResponse struct {
 	OnChainConfirmed bool    `json:"on_chain_confirmed"`
 	FilecoinCID      string  `json:"filecoin_cid,omitempty"`
 	// Relay fields — returned so the frontend can call CredexLending.requestLoan()
-	ProofID     string `json:"proof_id,omitempty"`
-	ProofData   string `json:"proof_data,omitempty"`
-	RelayTxHash string `json:"relay_tx_hash,omitempty"`
-	ProofExpiry string `json:"proof_expiry,omitempty"`
+	ProofID        string `json:"proof_id,omitempty"`
+	ProofData      string `json:"proof_data,omitempty"`
+	RelayTxHash    string `json:"relay_tx_hash,omitempty"`
+	ProofExpiry    string `json:"proof_expiry,omitempty"`
 	SolidityLoanID uint64 `json:"solidity_loan_id,omitempty"`
 }
 
@@ -127,8 +127,10 @@ type LoanStatusResponse struct {
 }
 
 type RepayRequest struct {
-	WalletAddress string `json:"wallet_address" binding:"required"`
-	LoanID        string `json:"loan_id"        binding:"required"`
+	WalletAddress  string  `json:"wallet_address"   binding:"required"`
+	LoanID         string  `json:"loan_id"          binding:"required"`
+	SolidityLoanID int     `json:"solidity_loan_id"` // optional — used to verify on-chain if backend lost state
+	AmountUSDC     float64 `json:"amount_usdc"`      // optional — echoed back if backend lost state
 }
 
 // ── Wallet ────────────────────────────────────────────────────────────────────

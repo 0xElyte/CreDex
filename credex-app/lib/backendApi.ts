@@ -239,10 +239,15 @@ export const backendApi = {
   getLoanStatus: (wallet: string) =>
     get<GoLoanStatusResponse>(`/api/v1/loan/status/${wallet}`),
 
-  repayLoan: (wallet: string, loanId: string) =>
+  repayLoan: (wallet: string, loanId: string, solidityLoanId?: number, amountUsdc?: number) =>
     post<{ success: boolean; message: string; loan_id: string; repaid_at: string; streak: number }>(
       "/api/v1/loan/repay",
-      { wallet_address: wallet, loan_id: loanId }
+      {
+        wallet_address: wallet,
+        loan_id: loanId,
+        ...(solidityLoanId ? { solidity_loan_id: solidityLoanId } : {}),
+        ...(amountUsdc    ? { amount_usdc: amountUsdc }           : {}),
+      }
     ),
 
   // Wallet

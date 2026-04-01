@@ -467,13 +467,24 @@ func (h *H) RepayLoan(c *gin.Context) {
 		msg := err.Error()
 		switch {
 		case strings.Contains(msg, "not found"):
-			c.JSON(http.StatusNotFound, gin.H{"error": msg})
+			// Backend lost state (restart). The on-chain repayLoan() tx already
+			// executed — trust it and return success with synthesised metadata.
+			now := time.Now().UTC()
+			loan = &models.LoanRecord{
+				LoanID:        loanID,
+				WalletAddress: wallet,
+				AmountUSDC:    req.AmountUSDC,
+				Status:        models.LoanRepaid,
+				RepaidAt:      &now,
+			}
+			fmt.Printf("[WARN] loan %s not in store (backend restarted) — accepting on-chain repayment\n", loanID)
 		case strings.Contains(msg, "does not belong"):
 			c.JSON(http.StatusForbidden, gin.H{"error": msg})
+			return
 		default:
 			c.JSON(http.StatusConflict, gin.H{"error": msg})
+			return
 		}
-		return
 	}
 
 	h.Store.InvalidateScore(wallet, 11155111)

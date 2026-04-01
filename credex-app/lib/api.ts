@@ -1158,7 +1158,9 @@ export async function submitRepayment(
   }
   onStep("Repayment confirmed on-chain.");
 
-  // 5. Mark repaid in backend store
-  const result = await backendApi.repayLoan(wallet, loanId);
+  // 5. Mark repaid in backend store (passes solidity ID + amount so backend can
+  //    reconstruct the record if it lost state after a restart)
+  const amountUSDC = Number(amountDue) / 1_000_000;
+  const result = await backendApi.repayLoan(wallet, loanId, solidityLoanId, amountUSDC);
   return { txHash: repayTxHash, streak: result.streak };
 }
